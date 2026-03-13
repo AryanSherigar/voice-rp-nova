@@ -1,0 +1,455 @@
+import React, { useReducer, useCallback, useState, useEffect } from 'react';
+import { Layout } from './components/Layout';
+import { StoryLog } from './components/StoryLog';
+import { ActionPanel } from './components/ActionPanel';
+import { LandingPage } from './components/LandingPage';
+import { Hub } from './components/Hub';
+import { CreateStory } from './components/CreateStory';
+import { StoryCardManager } from './components/StoryCardManager';
+import { CharacterManager } from './components/CharacterManager';
+import { LocationManager } from './components/LocationManager';
+import { DirectorOverlay } from './components/DirectorOverlay'; // Import DirectorOverlay
+import { createGameStateFromForm } from './utils/gameFactory';
+import { saveGame } from './services/storageService';
+import {
+  GameState,
+  PlayerInput,
+  EventLogEntry,
+  WorldUpdateResponse,
+  DirectorAgentResponse,
+  ViewMode,
+  ScenarioTemplate,
+  CreateStoryFormData,
+  StoryCard,
+  CharacterState,
+  Location,
+  DirectorDecision
+} from './types';
+import { executeTurnStream } from './services/geminiService';
+
+const SYSTEM_STABILIZED_MESSAGE = '[SYSTEM: Cognitive divergence detected. World state stabilized.]';
+const SYSTEM_MISSING_TERMINAL_MESSAGE = '[SYSTEM: Turn finalized with fallback (missing terminal chunk).]';
+const TURN_TIMEOUT_MS = 30000;
+
+// --- State Management ---
+
+type Action =
+  | { type: 'START_TURN' }
+  | { type: 'STREAM_UPDATE'; payload: string }
+  | { type: 'END_TURN'; payload: { director: DirectorAgentResponse; world: WorldUpdateResponse } }
+  | { type: 'ADD_LOG'; payload: EventLogEntry }
+  | { type: 'INIT_GAME'; payload: GameState }
+  | { type: 'RESET_GAME' }
+  // Story Card Actions
+  | { type: 'ADD_CARD'; payload: StoryCard }
+  | { type: 'UPDATE_CARD'; payload: StoryCard }
+  | { type: 'DELETE_CARD'; payload: string }
+  // Character Actions
+  | { type: 'ADD_CHARACTER'; payload: CharacterState }
+  | { type: 'UPDATE_CHARACTER'; payload: CharacterState }
+  | { type: 'DELETE_CHARACTER'; payload: string }
+  // Location Actions
+  | { type: 'ADD_LOCATION'; payload: Location }
+  | { type: 'UPDATE_LOCATION'; payload: Location }
+  | { type: 'DELETE_LOCATION'; payload: string }
+  // Director Actions
+  | { type: 'UPDATE_DIRECTOR_STATE'; payload: Partial<DirectorDecision> };
+
+function gameReducer(state: GameState | null, action: Action): GameState | null {
+  if (action.type === 'INIT_GAME') {
+    return action.payload;
+  }
+  if (action.type === 'RESET_GAME') {
+    return null;
+  }
+  if (!state) return null;
+
+  switch (action.type) {
+    case 'START_TURN':
+      return { ...state, isProcessing: true };
+
+    case 'ADD_LOG':
+      return { ...state, history: [...state.history, action.payload] };
+
+    case 'STREAM_UPDATE': {
+      const lastEntry = state.history[state.history.length - 1];
+      let newHistory = [...state.history];
+
+      if (lastEntry.type === 'PLAYER' || lastEntry.type === 'DIRECTOR') {
+        newHistory.push({
+          id: `evt_${Date.now()}`,
+          tick: state.tick + 1,
+          type: 'NARRATOR',
+          description: action.payload,
+          timestamp: Date.now()
+        });
+      } else if (lastEntry.type === 'NARRATOR') {
+        newHistory[newHistory.length - 1] = {
+          ...lastEntry,
+          description: action.payload
+        };
+      }
+
+      return { ...state, history: newHistory };
+    }
+
+    case 'END_TURN':
+      const { director, world } = action.payload;
+
+      const updatedCharacters = state.characters.map(char => {
+        const update = world.characterUpdates?.find(u => u.id === char.id);
+        if (!update) return char;
+        return {
+          ...char,
+          status: update.status || char.status,
+          emotions: { ...char.emotions, ...update.emotions }
+        };
+      });
+
+      const directorEntry: EventLogEntry = {
+        id: `dir_${Date.now()}`,
+        tick: state.tick + 1,
+        type: 'DIRECTOR',
+        description: `Director: ${director.pacing} Pacing`,
+        timestamp: Date.now()
+      };
+
+      // Reset card activity on new turn (could be enhanced to highlight cards used in *this* turn if backend returned them)
+      const resetCards = state.storyCards.map(c => ({ ...c, isActive: false }));
+
+      const newState = {
+        ...state,
+        tick: state.tick + 1,
+        isProcessing: false,
+        history: [...state.history, directorEntry],
+        characters: updatedCharacters,
+        directorState: director,
+        storyCards: resetCards,
+        storyDNA: { ...state.storyDNA, ...(world.dnaShift || {}) }
+      };
+
+      return newState;
+
+    // Story Card Reducers
+    case 'ADD_CARD':
+      return { ...state, storyCards: [...(state.storyCards || []), action.payload] };
+
+    case 'UPDATE_CARD':
+      return {
+        ...state,
+        storyCards: state.storyCards.map(c => c.id === action.payload.id ? action.payload : c)
+      };
+
+    case 'DELETE_CARD':
+      return {
+        ...state,
+        storyCards: state.storyCards.filter(c => c.id !== action.payload)
+      };
+
+    // Character Reducers
+    case 'ADD_CHARACTER':
+      return { ...state, characters: [...state.characters, action.payload] };
+
+    case 'UPDATE_CHARACTER':
+      return {
+        ...state,
+        characters: state.characters.map(c => c.id === action.payload.id ? action.payload : c)
+      };
+
+    case 'DELETE_CHARACTER':
+      return {
+        ...state,
+        characters: state.characters.filter(c => c.id !== action.payload)
+      };
+
+    // Location Reducers
+    case 'ADD_LOCATION':
+      return {
+        ...state,
+        world: {
+          ...state.world,
+          locations: { ...state.world.locations, [action.payload.id]: action.payload }
+        }
+      };
+
+    case 'UPDATE_LOCATION':
+      return {
+        ...state,
+        world: {
+          ...state.world,
+          locations: { ...state.world.locations, [action.payload.id]: action.payload }
+        }
+      };
+
+    case 'DELETE_LOCATION': {
+      // Don't delete current location
+      if (action.payload === state.world.currentLocationId) return state;
+
+      const newLocations = { ...state.world.locations };
+      delete newLocations[action.payload];
+      return {
+        ...state,
+        world: { ...state.world, locations: newLocations }
+      };
+    }
+
+    // Director Reducers
+    case 'UPDATE_DIRECTOR_STATE':
+      return {
+        ...state,
+        directorState: { ...state.directorState, ...action.payload }
+      };
+
+    default:
+      return state;
+  }
+}
+
+export default function App() {
+  const [view, setView] = useState<ViewMode>(ViewMode.LANDING);
+  const [gameState, dispatch] = useReducer(gameReducer, null);
+  const [isDirectorMode, setIsDirectorMode] = useState(false);
+
+  // Persistence Effect: Auto-save when game state changes (and isn't processing)
+  useEffect(() => {
+    if (gameState && !gameState.isProcessing) {
+      saveGame(gameState);
+    }
+  }, [gameState]);
+
+  // --- Actions ---
+
+  const enterHub = () => setView(ViewMode.HUB);
+  const startCreation = () => setView(ViewMode.CREATE);
+
+  const startScenario = (scenario: ScenarioTemplate) => {
+    // Generate a fresh unique ID for new scenario instances so they don't overwrite the template slots if we had them
+    const freshState = {
+      ...scenario.initialState,
+      id: `game_${Date.now()}`,
+      lastPlayed: Date.now()
+    };
+    dispatch({ type: 'INIT_GAME', payload: freshState });
+    setView(ViewMode.PLAY);
+  };
+
+  const loadSavedGame = (state: GameState) => {
+    dispatch({ type: 'INIT_GAME', payload: state });
+    setView(ViewMode.PLAY);
+  };
+
+  const submitCustomStory = (data: CreateStoryFormData) => {
+    const newState = createGameStateFromForm(data);
+    dispatch({ type: 'INIT_GAME', payload: newState });
+    setView(ViewMode.PLAY);
+  };
+
+  const exitGame = () => {
+    if (gameState) saveGame(gameState); // Ensure save on exit
+    dispatch({ type: 'RESET_GAME' });
+    setView(ViewMode.HUB);
+  };
+
+  const handleInput = useCallback(async (input: PlayerInput) => {
+    if (!gameState) return;
+
+    const fallbackTurnPayload = {
+      director: gameState.directorState,
+      world: {
+        narrative: 'World state stabilized after a transient systems anomaly.',
+        characterUpdates: []
+      }
+    };
+
+    const inputEntry: EventLogEntry = {
+      id: `in_${Date.now()}`,
+      tick: gameState.tick,
+      type: 'PLAYER',
+      description: input.content,
+      timestamp: Date.now()
+    };
+    dispatch({ type: 'ADD_LOG', payload: inputEntry });
+    dispatch({ type: 'START_TURN' });
+
+    const appendSystemLog = (description: string) => {
+      dispatch({
+        type: 'ADD_LOG',
+        payload: {
+          id: `sys_${Date.now()}`,
+          tick: gameState.tick + 1,
+          type: 'DIRECTOR',
+          description,
+          timestamp: Date.now()
+        }
+      });
+    };
+
+    const finalizeWithFallback = (description: string) => {
+      dispatch({ type: 'END_TURN', payload: fallbackTurnPayload });
+      appendSystemLog(description);
+    };
+
+    try {
+      const stream = executeTurnStream(gameState, input);
+      let terminalSeen = false;
+      const turnTimeoutAt = Date.now() + TURN_TIMEOUT_MS;
+
+      for await (const chunk of stream) {
+        if (Date.now() > turnTimeoutAt) {
+          finalizeWithFallback('[SYSTEM: Stream timeout detected. World state stabilized.]');
+          terminalSeen = true;
+          break;
+        }
+
+        if (chunk.type === 'text' && chunk.content) {
+          dispatch({ type: 'STREAM_UPDATE', payload: chunk.content });
+        }
+        else if (chunk.type === 'final' && chunk.data) {
+          const { director, world } = chunk.data;
+          dispatch({ type: 'END_TURN', payload: { director, world } });
+          terminalSeen = true;
+          break;
+        }
+        else if (chunk.type === 'error_final' && chunk.data) {
+          dispatch({ type: 'END_TURN', payload: { director: chunk.data.director, world: chunk.data.world } });
+          appendSystemLog(`${SYSTEM_STABILIZED_MESSAGE} (${chunk.data.reason})`);
+          terminalSeen = true;
+          break;
+        }
+      }
+
+      if (!terminalSeen) {
+        finalizeWithFallback(SYSTEM_MISSING_TERMINAL_MESSAGE);
+      }
+    } catch (error) {
+      console.error("Turn failed", error);
+      finalizeWithFallback(SYSTEM_STABILIZED_MESSAGE);
+    }
+  }, [gameState]);
+
+  // --- Views ---
+
+  if (view === ViewMode.LANDING) return <LandingPage onEnter={enterHub} />;
+
+  if (view === ViewMode.HUB) return (
+    <Layout>
+      <Hub
+        onSelectScenario={startScenario}
+        onCreateNew={startCreation}
+        onLoadGame={loadSavedGame}
+      />
+    </Layout>
+  );
+
+  if (view === ViewMode.CREATE) return <Layout><CreateStory onSubmit={submitCustomStory} onCancel={enterHub} /></Layout>;
+
+  if (view === ViewMode.PLAY && gameState) {
+    const locationList = Object.values(gameState.world.locations);
+
+    // 1. Left Sidebar Content (Location Manager + DNA + Story Cards)
+    const LeftSidebar = (
+      <div className="p-4 space-y-8">
+        <section>
+          <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3">Current Location</h3>
+          <div className="bg-navy-900 border border-navy-800 p-4 rounded mb-4">
+            <h2 className="text-lg font-bold text-white mb-1">{gameState.world.locations[gameState.world.currentLocationId]?.name}</h2>
+            <div className="text-[10px] text-teal-500 font-bold uppercase mb-2">CALM TONE</div>
+            <p className="text-sm text-slate-400 leading-relaxed">
+              {gameState.world.locations[gameState.world.currentLocationId]?.description}
+            </p>
+          </div>
+
+          <LocationManager
+            locations={locationList}
+            currentLocationId={gameState.world.currentLocationId}
+            onAdd={(loc) => dispatch({ type: 'ADD_LOCATION', payload: loc })}
+            onUpdate={(loc) => dispatch({ type: 'UPDATE_LOCATION', payload: loc })}
+            onDelete={(id) => dispatch({ type: 'DELETE_LOCATION', payload: id })}
+          />
+        </section>
+
+        <section>
+          <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3">Story DNA</h3>
+          <div className="space-y-4">
+            <DNAProgress label="Order / Chaos" value={gameState.storyDNA.orderChaos} />
+            <DNAProgress label="Hope / Despair" value={gameState.storyDNA.hopeDespair} color="orange" />
+            <DNAProgress label="Trust / Betrayal" value={gameState.storyDNA.trustBetrayal} color="teal" />
+          </div>
+        </section>
+
+        <section className="pt-4 border-t border-navy-800">
+          <StoryCardManager
+            cards={gameState.storyCards || []}
+            characters={gameState.characters}
+            locations={locationList}
+            onAdd={(card) => dispatch({ type: 'ADD_CARD', payload: card })}
+            onUpdate={(card) => dispatch({ type: 'UPDATE_CARD', payload: card })}
+            onDelete={(id) => dispatch({ type: 'DELETE_CARD', payload: id })}
+          />
+        </section>
+      </div>
+    );
+
+    // 2. Right Sidebar Content (Character Manager)
+    const RightSidebar = (
+      <div className="p-4">
+        <CharacterManager
+          characters={gameState.characters}
+          onAdd={(char) => dispatch({ type: 'ADD_CHARACTER', payload: char })}
+          onUpdate={(char) => dispatch({ type: 'UPDATE_CHARACTER', payload: char })}
+          onDelete={(id) => dispatch({ type: 'DELETE_CHARACTER', payload: id })}
+        />
+      </div>
+    );
+
+    // 3. Director Overlay Content
+    const DirectorContent = (
+      <DirectorOverlay
+        directorState={gameState.directorState}
+        dna={gameState.storyDNA}
+        onUpdate={(update) => dispatch({ type: 'UPDATE_DIRECTOR_STATE', payload: update })}
+      />
+    );
+
+    return (
+      <Layout
+        leftSidebar={LeftSidebar}
+        rightSidebar={RightSidebar}
+        topOverlay={isDirectorMode ? DirectorContent : undefined}
+        onExit={exitGame}
+        showExit
+        isDirectorMode={isDirectorMode}
+        onToggleDirector={() => setIsDirectorMode(!isDirectorMode)}
+      >
+        {/* Center: Story & Input */}
+        <div className="flex flex-col h-full">
+          <StoryLog history={gameState.history} />
+          <ActionPanel onInput={handleInput} isProcessing={gameState.isProcessing} />
+        </div>
+      </Layout>
+    );
+  }
+
+  return <div>Loading...</div>;
+}
+
+const DNAProgress: React.FC<{ label: string; value: number; color?: 'blue' | 'orange' | 'teal' }> = ({ label, value, color = 'blue' }) => {
+  const [left, right] = label.split(' / ');
+  const getColor = () => {
+    if (color === 'orange') return 'bg-orange-500';
+    if (color === 'teal') return 'bg-teal-500';
+    return 'bg-blue-500';
+  }
+  return (
+    <div>
+      <div className="flex justify-between text-[10px] text-slate-500 mb-1">
+        <span>{left}</span>
+        <span>{right}</span>
+      </div>
+      <div className="h-1.5 bg-navy-900 rounded-full overflow-hidden">
+        <div className={`h-full ${getColor()} transition-all`} style={{ width: `${value}%` }}></div>
+      </div>
+      <div className="text-right text-[10px] text-slate-600 mt-0.5">{value}%</div>
+    </div>
+  )
+}

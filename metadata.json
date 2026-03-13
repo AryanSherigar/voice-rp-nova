@@ -1,0 +1,5 @@
+{
+  "name": "Chronos: AI Story Engine",
+  "description": "A stateful, event-sourced role-play engine where characters have memory, emotions, and goals, directed by a high-level AI Director.",
+  "requestFramePermissions": []
+}
