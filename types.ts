@@ -91,7 +91,7 @@ export interface PlayerInput {
   content: string;
 }
 
-// Responses from Gemini Agents
+// Responses from turn engine
 export interface DirectorAgentResponse {
   pacing: 'Slow' | 'Normal' | 'Fast';
   tension: number;
@@ -108,6 +108,26 @@ export interface WorldUpdateResponse {
   }[];
   newFacts?: string[];
   dnaShift?: Partial<StoryDNAState>;
+}
+
+export interface NarratorAudioPayload {
+  mimeType: string;
+  payload: string;
+}
+
+export interface TurnTraceMetadata {
+  agentNames?: string[];
+  latencyMs?: number;
+}
+
+export interface TurnResponse {
+  narrator: {
+    transcript: string;
+    audio?: NarratorAudioPayload;
+  };
+  director: DirectorAgentResponse;
+  world: WorldUpdateResponse;
+  trace?: TurnTraceMetadata;
 }
 
 // --- Navigation & Creation Types ---

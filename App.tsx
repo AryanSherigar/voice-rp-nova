@@ -17,6 +17,7 @@ import {
   EventLogEntry,
   WorldUpdateResponse,
   DirectorAgentResponse,
+  TurnResponse,
   ViewMode,
   ScenarioTemplate,
   CreateStoryFormData,
@@ -25,7 +26,7 @@ import {
   Location,
   DirectorDecision
 } from './types';
-import { executeTurnStream } from './services/geminiService';
+import { executeTurn } from './services/geminiService';
 
 const SYSTEM_STABILIZED_MESSAGE = '[SYSTEM: Cognitive divergence detected. World state stabilized.]';
 const SYSTEM_MISSING_TERMINAL_MESSAGE = '[SYSTEM: Turn finalized with fallback (missing terminal chunk).]';
@@ -253,11 +254,17 @@ export default function App() {
   const handleInput = useCallback(async (input: PlayerInput) => {
     if (!gameState) return;
 
-    const fallbackTurnPayload = {
+    const fallbackTurnPayload: TurnResponse = {
+      narrator: {
+        transcript: 'World state stabilized after a transient systems anomaly.'
+      },
       director: gameState.directorState,
       world: {
         narrative: 'World state stabilized after a transient systems anomaly.',
         characterUpdates: []
+      },
+      trace: {
+        agentNames: ['fallback'],
       }
     };
 
@@ -285,45 +292,25 @@ export default function App() {
     };
 
     const finalizeWithFallback = (description: string) => {
-      dispatch({ type: 'END_TURN', payload: fallbackTurnPayload });
+      dispatch({ type: 'STREAM_UPDATE', payload: fallbackTurnPayload.narrator.transcript });
+      dispatch({ type: 'END_TURN', payload: { director: fallbackTurnPayload.director, world: fallbackTurnPayload.world } });
       appendSystemLog(description);
     };
 
     try {
-      const stream = executeTurnStream(gameState, input);
-      let terminalSeen = false;
       const turnTimeoutAt = Date.now() + TURN_TIMEOUT_MS;
+      const turnResponse = await executeTurn(gameState, input);
 
-      for await (const chunk of stream) {
-        if (Date.now() > turnTimeoutAt) {
-          finalizeWithFallback('[SYSTEM: Stream timeout detected. World state stabilized.]');
-          terminalSeen = true;
-          break;
-        }
-
-        if (chunk.type === 'text' && chunk.content) {
-          dispatch({ type: 'STREAM_UPDATE', payload: chunk.content });
-        }
-        else if (chunk.type === 'final' && chunk.data) {
-          const { director, world } = chunk.data;
-          dispatch({ type: 'END_TURN', payload: { director, world } });
-          terminalSeen = true;
-          break;
-        }
-        else if (chunk.type === 'error_final' && chunk.data) {
-          dispatch({ type: 'END_TURN', payload: { director: chunk.data.director, world: chunk.data.world } });
-          appendSystemLog(`${SYSTEM_STABILIZED_MESSAGE} (${chunk.data.reason})`);
-          terminalSeen = true;
-          break;
-        }
+      if (Date.now() > turnTimeoutAt) {
+        finalizeWithFallback('[SYSTEM: Stream timeout detected. World state stabilized.]');
+        return;
       }
 
-      if (!terminalSeen) {
-        finalizeWithFallback(SYSTEM_MISSING_TERMINAL_MESSAGE);
-      }
+      dispatch({ type: 'STREAM_UPDATE', payload: turnResponse.narrator.transcript });
+      dispatch({ type: 'END_TURN', payload: { director: turnResponse.director, world: turnResponse.world } });
     } catch (error) {
       console.error("Turn failed", error);
-      finalizeWithFallback(SYSTEM_STABILIZED_MESSAGE);
+      finalizeWithFallback(`${SYSTEM_STABILIZED_MESSAGE} (${SYSTEM_MISSING_TERMINAL_MESSAGE})`);
     }
   }, [gameState]);
 
