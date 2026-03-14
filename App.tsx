@@ -36,7 +36,7 @@ const TURN_TIMEOUT_MS = 30000;
 
 type Action =
   | { type: 'START_TURN' }
-  | { type: 'STREAM_UPDATE'; payload: string }
+  | { type: 'STREAM_UPDATE'; payload: { description: string; audioBase64?: string; audioMimeType?: string } }
   | { type: 'END_TURN'; payload: { director: DirectorAgentResponse; world: WorldUpdateResponse } }
   | { type: 'ADD_LOG'; payload: EventLogEntry }
   | { type: 'INIT_GAME'; payload: GameState }
@@ -81,13 +81,17 @@ function gameReducer(state: GameState | null, action: Action): GameState | null 
           id: `evt_${Date.now()}`,
           tick: state.tick + 1,
           type: 'NARRATOR',
-          description: action.payload,
-          timestamp: Date.now()
+          description: action.payload.description,
+          timestamp: Date.now(),
+          audioBase64: action.payload.audioBase64,
+          audioMimeType: action.payload.audioMimeType
         });
       } else if (lastEntry.type === 'NARRATOR') {
         newHistory[newHistory.length - 1] = {
           ...lastEntry,
-          description: action.payload
+          description: action.payload.description,
+          audioBase64: action.payload.audioBase64,
+          audioMimeType: action.payload.audioMimeType
         };
       }
 
@@ -273,7 +277,9 @@ export default function App() {
       tick: gameState.tick,
       type: 'PLAYER',
       description: input.content,
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      audioBase64: input.audioBase64,
+      audioMimeType: input.audioMimeType
     };
     dispatch({ type: 'ADD_LOG', payload: inputEntry });
     dispatch({ type: 'START_TURN' });
@@ -292,7 +298,14 @@ export default function App() {
     };
 
     const finalizeWithFallback = (description: string) => {
-      dispatch({ type: 'STREAM_UPDATE', payload: fallbackTurnPayload.narrator.transcript });
+      dispatch({
+        type: 'STREAM_UPDATE',
+        payload: {
+          description: fallbackTurnPayload.narrator.transcript,
+          audioBase64: fallbackTurnPayload.narrator.audioBase64 ?? fallbackTurnPayload.event?.audioBase64,
+          audioMimeType: fallbackTurnPayload.narrator.audioMimeType ?? fallbackTurnPayload.event?.audioMimeType
+        }
+      });
       dispatch({ type: 'END_TURN', payload: { director: fallbackTurnPayload.director, world: fallbackTurnPayload.world } });
       appendSystemLog(description);
     };
@@ -306,7 +319,14 @@ export default function App() {
         return;
       }
 
-      dispatch({ type: 'STREAM_UPDATE', payload: turnResponse.narrator.transcript });
+      dispatch({
+        type: 'STREAM_UPDATE',
+        payload: {
+          description: turnResponse.narrator.transcript,
+          audioBase64: turnResponse.narrator.audioBase64 ?? turnResponse.event?.audioBase64,
+          audioMimeType: turnResponse.narrator.audioMimeType ?? turnResponse.event?.audioMimeType
+        }
+      });
       dispatch({ type: 'END_TURN', payload: { director: turnResponse.director, world: turnResponse.world } });
     } catch (error) {
       console.error("Turn failed", error);
