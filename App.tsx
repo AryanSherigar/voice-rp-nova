@@ -32,6 +32,7 @@ import { TURN_TIMEOUT_MS } from './services/config';
 
 const SYSTEM_STABILIZED_MESSAGE = '[SYSTEM: Cognitive divergence detected. World state stabilized.]';
 const SYSTEM_MISSING_TERMINAL_MESSAGE = '[SYSTEM: Turn finalized with fallback (missing terminal chunk).]';
+const MAX_WORLD_FACTS = 50;
 
 // --- State Management ---
 
@@ -89,6 +90,14 @@ function gameReducer(state: GameState | null, action: Action): GameState | null 
 
     case 'END_TURN':
       const { director, world } = action.payload;
+      const mergedFacts = [...state.world.facts, ...(world.newFacts ?? [])]
+        .reduceRight<string[]>((facts, fact) => {
+          if (!facts.includes(fact)) {
+            facts.unshift(fact);
+          }
+          return facts;
+        }, [])
+        .slice(-MAX_WORLD_FACTS);
 
       const updatedCharacters = state.characters.map(char => {
         const update = world.characterUpdates?.find(u => u.id === char.id);
@@ -117,6 +126,10 @@ function gameReducer(state: GameState | null, action: Action): GameState | null 
         isProcessing: false,
         history: [...state.history, directorEntry],
         characters: updatedCharacters,
+        world: {
+          ...state.world,
+          facts: mergedFacts
+        },
         directorState: director,
         storyCards: resetCards,
         storyDNA: { ...state.storyDNA, ...(world.dnaShift || {}) }
