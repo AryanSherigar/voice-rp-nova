@@ -7,8 +7,12 @@ const EMBEDDING_MODEL = process.env.BEDROCK_EMBEDDING_MODEL_ID;
 const BEDROCK_REGION = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION;
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_REQUESTS = 20;
+const RATE_LIMIT_SWEEP_INTERVAL_MS = Number.parseInt(process.env.RATE_LIMIT_SWEEP_INTERVAL_MS ?? `${5 * 60_000}`, 10);
 const STORY_CARD_TOP_K = Number.parseInt(process.env.STORY_CARD_TOP_K ?? '3', 10);
 const STORY_CARD_SIMILARITY_THRESHOLD = Number.parseFloat(process.env.STORY_CARD_SIMILARITY_THRESHOLD ?? '0.35');
+const STORY_CARD_EMBEDDING_CACHE_TTL_MS = Number.parseInt(process.env.STORY_CARD_EMBEDDING_CACHE_TTL_MS ?? `${30 * 60_000}`, 10);
+const STORY_CARD_EMBEDDING_CACHE_MAX_ENTRIES = Number.parseInt(process.env.STORY_CARD_EMBEDDING_CACHE_MAX_ENTRIES ?? '500', 10);
+const STORY_CARD_EMBEDDING_CACHE_SWEEP_INTERVAL_MS = Number.parseInt(process.env.STORY_CARD_EMBEDDING_CACHE_SWEEP_INTERVAL_MS ?? `${10 * 60_000}`, 10);
 const MAX_REQUEST_BODY_BYTES = Number.parseInt(process.env.TURN_MAX_BODY_BYTES ?? `${1_500_000}`, 10);
 const MAX_INPUT_AUDIO_BASE64_BYTES = Number.parseInt(process.env.TURN_MAX_AUDIO_BASE64_BYTES ?? `${1_200_000}`, 10);
 const MAX_PROMPT_STRING_LENGTH = 1_000;
@@ -44,6 +48,11 @@ type EmbeddedStoryCard = {
   title: string;
   entry: string;
   similarity?: number;
+};
+
+type StoryCardEmbeddingCacheEntry = {
+  embedding: number[];
+  expiresAt: number;
 };
 
 type ValidationResult<T> = { ok: true; value: T } | { ok: false; error: string };
@@ -321,8 +330,77 @@ const validateState = (state: unknown): ValidationResult<GameState> => {
   return { ok: true, value: validatedState };
 };
 
+// Best-effort process-memory stores: entries are not shared across instances and can be lost on restart.
 const rateLimitStore = new Map<string, RateLimitRecord>();
-const storyCardEmbeddingStore = new Map<string, number[]>();
+const storyCardEmbeddingStore = new Map<string, StoryCardEmbeddingCacheEntry>();
+let lastRateLimitSweepAt = 0;
+let lastStoryCardEmbeddingSweepAt = 0;
+
+const sweepRateLimitStore = (now: number): void => {
+  for (const [key, value] of rateLimitStore.entries()) {
+    if (now - value.windowStart > RATE_LIMIT_WINDOW_MS) {
+      rateLimitStore.delete(key);
+    }
+  }
+
+  lastRateLimitSweepAt = now;
+};
+
+const sweepStoryCardEmbeddingStore = (now: number): void => {
+  for (const [key, value] of storyCardEmbeddingStore.entries()) {
+    if (value.expiresAt <= now) {
+      storyCardEmbeddingStore.delete(key);
+    }
+  }
+
+  while (storyCardEmbeddingStore.size > STORY_CARD_EMBEDDING_CACHE_MAX_ENTRIES) {
+    const oldestKey = storyCardEmbeddingStore.keys().next().value;
+    if (!oldestKey) {
+      break;
+    }
+
+    storyCardEmbeddingStore.delete(oldestKey);
+  }
+
+  lastStoryCardEmbeddingSweepAt = now;
+};
+
+const getStoryCardEmbeddingFromCache = (key: string, now: number): number[] | null => {
+  if (now - lastStoryCardEmbeddingSweepAt >= STORY_CARD_EMBEDDING_CACHE_SWEEP_INTERVAL_MS) {
+    sweepStoryCardEmbeddingStore(now);
+  }
+
+  const cached = storyCardEmbeddingStore.get(key);
+  if (!cached) {
+    return null;
+  }
+
+  if (cached.expiresAt <= now) {
+    storyCardEmbeddingStore.delete(key);
+    return null;
+  }
+
+  // LRU behavior: refresh insertion order on access.
+  storyCardEmbeddingStore.delete(key);
+  storyCardEmbeddingStore.set(key, cached);
+  return cached.embedding;
+};
+
+const setStoryCardEmbeddingCache = (key: string, embedding: number[], now: number): void => {
+  storyCardEmbeddingStore.set(key, {
+    embedding,
+    expiresAt: now + STORY_CARD_EMBEDDING_CACHE_TTL_MS,
+  });
+
+  while (storyCardEmbeddingStore.size > STORY_CARD_EMBEDDING_CACHE_MAX_ENTRIES) {
+    const oldestKey = storyCardEmbeddingStore.keys().next().value;
+    if (!oldestKey) {
+      break;
+    }
+
+    storyCardEmbeddingStore.delete(oldestKey);
+  }
+};
 
 const getClientIp = (req: any): string => {
   const forwarded = req.headers['x-forwarded-for'];
@@ -335,6 +413,11 @@ const getClientIp = (req: any): string => {
 
 const isRateLimited = (ip: string): boolean => {
   const now = Date.now();
+
+  if (now - lastRateLimitSweepAt >= RATE_LIMIT_SWEEP_INTERVAL_MS) {
+    sweepRateLimitStore(now);
+  }
+
   const existing = rateLimitStore.get(ip);
 
   if (!existing || now - existing.windowStart > RATE_LIMIT_WINDOW_MS) {
@@ -487,15 +570,15 @@ const getSemanticMatchedCards = async (client: BedrockRuntimeClient, state: Game
   const scoredCards: EmbeddedStoryCard[] = [];
 
   for (const card of state.storyCards) {
+    const now = Date.now();
     const key = getStoryCardCacheKey(state, card.id, card.entry);
-    const cached = storyCardEmbeddingStore.get(key);
-    let cardEmbedding = cached;
+    let cardEmbedding = getStoryCardEmbeddingFromCache(key, now) ?? undefined;
 
     if (!cardEmbedding) {
       const cardContext = [card.title, card.entry, card.keys.join(' ')].filter(Boolean).join('\n');
       cardEmbedding = await embedText(client, cardContext) ?? undefined;
       if (cardEmbedding) {
-        storyCardEmbeddingStore.set(key, cardEmbedding);
+        setStoryCardEmbeddingCache(key, cardEmbedding, now);
       }
     }
 
