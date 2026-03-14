@@ -44,9 +44,9 @@ export const DirectorOverlay: React.FC<Props> = ({ directorState, dna, onUpdate 
           <div className="flex justify-between items-center">
             <h3 className="font-display font-bold text-teal-500 text-xs tracking-widest uppercase flex items-center gap-2">
                 <span className="w-2 h-2 rounded-full bg-teal-500 animate-pulse"></span>
-                Director Override
+                Supervisor Assessment
             </h3>
-            <span className="text-[10px] text-teal-500/50 font-mono uppercase">System Active</span>
+            <span className="text-[10px] text-teal-500/50 font-mono uppercase">Coaching Live</span>
           </div>
 
           <div className="grid grid-cols-2 gap-4">
@@ -95,7 +95,7 @@ export const DirectorOverlay: React.FC<Props> = ({ directorState, dna, onUpdate 
       <div className="flex-[2] min-w-[300px] bg-navy-900 border border-navy-800 rounded p-4 relative group hover:border-navy-700 transition-colors">
           <label className="text-[10px] uppercase font-bold text-slate-500 mb-2 block tracking-widest flex justify-between">
               <span>Current Directive</span>
-              <span className="text-slate-600 text-[9px] lowercase font-normal italic">Instructions for the AI narrator</span>
+              <span className="text-slate-600 text-[9px] lowercase font-normal italic">Performance coaching for the AI narrator</span>
           </label>
           <div className="flex gap-4">
               <input 
@@ -130,13 +130,15 @@ export const DirectorOverlay: React.FC<Props> = ({ directorState, dna, onUpdate 
           </div>
       </div>
 
-      {/* 3. DNA Monitor (Read Only) */}
+      {/* 3. KPI Monitor (Read Only) */}
       <div className="flex-1 min-w-[200px] border-l border-navy-800 pl-6 hidden xl:block">
-         <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3">Story DNA</h3>
+         <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Interaction Metrics</h3>
+         <p className="text-[9px] text-slate-600 uppercase tracking-wide mb-3">Coaching KPI Snapshot</p>
          <div className="space-y-3">
-            <MiniDNA label="Order" value={dna.orderChaos} color="bg-slate-500" />
-            <MiniDNA label="Hope" value={dna.hopeDespair} color="bg-orange-500" />
             <MiniDNA label="Trust" value={dna.trustBetrayal} color="bg-teal-500" />
+            <MiniDNA label="Fear" value={directorState.tension} color="bg-indigo-500" />
+            <MiniDNA label="Anger" value={100 - dna.orderChaos} color="bg-rose-500" />
+            <MiniDNA label="Hope" value={dna.hopeDespair} color="bg-orange-500" />
          </div>
       </div>
 
