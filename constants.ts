@@ -197,7 +197,189 @@ const FANTASY_STATE: GameState = {
   ]
 };
 
+const HOSTILE_CLIENT_DEESCALATION_STATE: GameState = {
+  id: "session-003",
+  title: "Hostile Client De-escalation",
+  tick: 0,
+  lastPlayed: Date.now(),
+  isProcessing: false,
+  directorState: {
+    pacing: "Fast",
+    tension: 82,
+    narrativeFocus: "Stabilize a volatile client interaction before it escalates into legal and safety risk.",
+    suggestedHints: ["Acknowledge the client's frustration", "Set boundaries while offering options"]
+  },
+  storyDNA: {
+    orderChaos: 35,
+    hopeDespair: 25,
+    trustBetrayal: 75
+  },
+  world: {
+    currentLocationId: "loc_executive_briefing",
+    time: "09:03",
+    facts: [
+      "A top-revenue client is threatening to terminate their enterprise contract on a live escalation call.",
+      "The client has already posted a public complaint naming your team."
+    ],
+    locations: {
+      "loc_executive_briefing": {
+        id: "loc_executive_briefing",
+        name: "Executive Escalation Bridge",
+        description: "A high-pressure virtual war room where legal, support, and account leadership are listening in real time."
+      }
+    }
+  },
+  characters: [
+    {
+      id: "char_client",
+      name: "Dana Cross",
+      role: "Enterprise Client Stakeholder",
+      description: "VP of Operations, furious after repeated outages during a major launch.",
+      status: "Confrontational",
+      emotions: {
+        trust: 8,
+        fear: 62,
+        anger: 90,
+        hope: 12
+      }
+    },
+    {
+      id: "char_legal",
+      name: "Mara Chen",
+      role: "Internal Counsel",
+      description: "Monitoring every phrase for liability exposure while urging a calm, compliant response.",
+      status: "On Edge",
+      emotions: {
+        trust: 35,
+        fear: 58,
+        anger: 28,
+        hope: 30
+      }
+    }
+  ],
+  storyCards: [
+    {
+      id: "card_sla",
+      title: "SLA Breach Window",
+      keys: ["sla", "uptime", "breach", "contract"],
+      entry: "The account has crossed the SLA error budget threshold for the quarter. Credits and executive remediation are now in scope."
+    },
+    {
+      id: "card_social",
+      title: "Public Escalation",
+      keys: ["social", "public", "press", "complaint"],
+      entry: "The client's complaint is circulating on industry channels, increasing reputational pressure and urgency."
+    }
+  ],
+  history: [
+    {
+      id: "evt_init",
+      tick: 0,
+      type: "NARRATOR",
+      description: "Dana slams her hand on the table camera feed. 'You have 10 minutes to tell me why I shouldn't cancel and notify procurement.' Every executive line goes silent, waiting for your first sentence.",
+      timestamp: Date.now()
+    }
+  ]
+};
+
+const MEDICAL_TRIAGE_CRISIS_STATE: GameState = {
+  id: "session-004",
+  title: "Medical Triage Crisis",
+  tick: 0,
+  lastPlayed: Date.now(),
+  isProcessing: false,
+  directorState: {
+    pacing: "Fast",
+    tension: 88,
+    narrativeFocus: "Prioritize scarce resources while balancing patient risk, team bandwidth, and escalating uncertainty.",
+    suggestedHints: ["Call out triage priority", "Delegate immediate interventions"]
+  },
+  storyDNA: {
+    orderChaos: 30,
+    hopeDespair: 18,
+    trustBetrayal: 48
+  },
+  world: {
+    currentLocationId: "loc_er_triage",
+    time: "02:14",
+    facts: [
+      "An MCI alert has flooded the emergency department with critical patients.",
+      "Only one trauma bay and one respiratory therapist are immediately available."
+    ],
+    locations: {
+      "loc_er_triage": {
+        id: "loc_er_triage",
+        name: "Emergency Triage Intake",
+        description: "Alarms pulse from every direction as stretchers stack the corridor and vitals monitors compete for attention."
+      }
+    }
+  },
+  characters: [
+    {
+      id: "char_charge_nurse",
+      name: "Riley Ortiz",
+      role: "Charge Nurse",
+      description: "Experienced, exhausted, and trying to keep the team synchronized under impossible load.",
+      status: "Overwhelmed",
+      emotions: {
+        trust: 52,
+        fear: 74,
+        anger: 34,
+        hope: 24
+      }
+    },
+    {
+      id: "char_resident",
+      name: "Dr. Amir Salim",
+      role: "Emergency Resident",
+      description: "Clinically sharp but visibly shaken by simultaneous life-threatening presentations.",
+      status: "Strained",
+      emotions: {
+        trust: 46,
+        fear: 81,
+        anger: 12,
+        hope: 20
+      }
+    }
+  ],
+  storyCards: [
+    {
+      id: "card_airway",
+      title: "Airway Collapse Risk",
+      keys: ["airway", "oxygen", "respiratory", "intubate"],
+      entry: "One patient is rapidly desaturating and may require intubation within minutes if not prioritized."
+    },
+    {
+      id: "card_peds",
+      title: "Pediatric Red Tag",
+      keys: ["pediatric", "child", "red tag", "family"],
+      entry: "A pediatric trauma patient arrives with unstable vitals while family members demand immediate updates."
+    }
+  ],
+  history: [
+    {
+      id: "evt_init",
+      tick: 0,
+      type: "NARRATOR",
+      description: "A triage alarm blares: 'Code surge in progress.' Riley locks eyes with you—'I need a decision now: who gets the trauma bay first?'",
+      timestamp: Date.now()
+    }
+  ]
+};
+
 export const PREMADE_SCENARIOS: ScenarioTemplate[] = [
+  {
+    id: "scen_hostile_client",
+    title: "Hostile Client De-escalation",
+    description: "Enterprise Simulation (Default Demo): Defuse a high-value client escalation before contractual and reputational fallout.",
+    initialState: HOSTILE_CLIENT_DEESCALATION_STATE
+  },
+  {
+    id: "scen_medical_triage",
+    title: "Medical Triage Crisis",
+    description: "Healthcare crisis simulation. Make rapid triage calls with constrained staff and rising patient acuity.",
+    initialState: MEDICAL_TRIAGE_CRISIS_STATE
+  },
   {
     id: "scen_cyberpunk",
     title: "The Neon Protocol",
