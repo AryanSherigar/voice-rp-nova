@@ -2,7 +2,6 @@ import { GameState, PlayerInput, TurnResponse } from '../types';
 import { TURN_TIMEOUT_MS } from './config';
 
 const PRIMARY_TURN_ENDPOINT = '/api/turn';
-const FALLBACK_TURN_ENDPOINT = '/api/aws-turn';
 
 export class TurnTimeoutError extends Error {
   constructor(message = `Turn request timed out after ${TURN_TIMEOUT_MS}ms.`, options?: ErrorOptions) {
@@ -92,16 +91,7 @@ export const executeTurn = async (state: GameState, input: PlayerInput): Promise
       throw new TurnTimeoutError(undefined, { cause: error });
     }
 
-    console.warn('Primary turn route failed; falling back to secondary turn route.', error);
-    try {
-      return await postTurn(FALLBACK_TURN_ENDPOINT, state, input, abortController.signal);
-    } catch (fallbackError) {
-      if (isAbortError(fallbackError) || abortController.signal.aborted) {
-        throw new TurnTimeoutError(undefined, { cause: fallbackError });
-      }
-
-      throw fallbackError;
-    }
+    throw error;
   } finally {
     clearTimeout(timeoutId);
   }
