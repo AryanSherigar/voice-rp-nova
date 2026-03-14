@@ -9,6 +9,16 @@ const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_REQUESTS = 20;
 const STORY_CARD_TOP_K = Number.parseInt(process.env.STORY_CARD_TOP_K ?? '3', 10);
 const STORY_CARD_SIMILARITY_THRESHOLD = Number.parseFloat(process.env.STORY_CARD_SIMILARITY_THRESHOLD ?? '0.35');
+const MAX_REQUEST_BODY_BYTES = Number.parseInt(process.env.TURN_MAX_BODY_BYTES ?? `${1_500_000}`, 10);
+const MAX_INPUT_AUDIO_BASE64_BYTES = Number.parseInt(process.env.TURN_MAX_AUDIO_BASE64_BYTES ?? `${1_200_000}`, 10);
+const MAX_PROMPT_STRING_LENGTH = 1_000;
+const MAX_INPUT_CONTENT_LENGTH = 2_000;
+const MAX_HISTORY_ITEMS = 20;
+const MAX_FACTS_ITEMS = 50;
+const MAX_STORY_CARDS = 40;
+const MAX_CHARACTERS = 25;
+const MAX_LOCATIONS = 50;
+const MAX_STORY_CARD_KEYS = 20;
 
 type RateLimitRecord = { count: number; windowStart: number };
 
@@ -34,6 +44,281 @@ type EmbeddedStoryCard = {
   title: string;
   entry: string;
   similarity?: number;
+};
+
+type ValidationResult<T> = { ok: true; value: T } | { ok: false; error: string };
+
+const ensureObject = (value: unknown): value is Record<string, unknown> => Boolean(value && typeof value === 'object' && !Array.isArray(value));
+
+const clampPromptString = (value: string, limit = MAX_PROMPT_STRING_LENGTH): string => value.slice(0, limit);
+
+const validateAudioMimeType = (value: unknown): value is string =>
+  typeof value === 'string' && /^audio\/[a-z0-9.+-]+$/i.test(value.trim());
+
+const validateBodyLength = (req: any): ValidationResult<null> => {
+  const rawLength = req.headers['content-length'];
+  if (typeof rawLength !== 'string') {
+    return { ok: true, value: null };
+  }
+
+  const contentLength = Number.parseInt(rawLength, 10);
+  if (!Number.isFinite(contentLength) || contentLength <= 0) {
+    return { ok: false, error: 'Invalid Content-Length header.' };
+  }
+
+  if (contentLength > MAX_REQUEST_BODY_BYTES) {
+    return { ok: false, error: `Request payload too large. Max ${MAX_REQUEST_BODY_BYTES} bytes.` };
+  }
+
+  return { ok: true, value: null };
+};
+
+const validateInput = (input: unknown): ValidationResult<PlayerInput> => {
+  if (!ensureObject(input)) {
+    return { ok: false, error: 'Invalid input: expected object.' };
+  }
+
+  if (input.type !== 'DO' && input.type !== 'SAY' && input.type !== 'STORY') {
+    return { ok: false, error: 'Invalid input.type: expected one of DO, SAY, STORY.' };
+  }
+
+  if (typeof input.content !== 'string') {
+    return { ok: false, error: 'Invalid input.content: expected string.' };
+  }
+
+  const content = input.content.trim();
+  if (!content) {
+    return { ok: false, error: 'Invalid input.content: cannot be empty.' };
+  }
+
+  if (content.length > MAX_INPUT_CONTENT_LENGTH) {
+    return { ok: false, error: `Invalid input.content: max length ${MAX_INPUT_CONTENT_LENGTH} characters.` };
+  }
+
+  const isVoice = input.isVoice === true;
+  const audioBase64 = typeof input.audioBase64 === 'string' ? input.audioBase64.trim() : undefined;
+  const audioMimeType = typeof input.audioMimeType === 'string' ? input.audioMimeType.trim() : undefined;
+
+  if (audioBase64 && Buffer.byteLength(audioBase64, 'utf8') > MAX_INPUT_AUDIO_BASE64_BYTES) {
+    return { ok: false, error: `Invalid input.audioBase64: max size ${MAX_INPUT_AUDIO_BASE64_BYTES} bytes.` };
+  }
+
+  if (audioMimeType && !validateAudioMimeType(audioMimeType)) {
+    return { ok: false, error: 'Invalid input.audioMimeType: expected audio/* MIME type.' };
+  }
+
+  if (isVoice && !audioBase64) {
+    return { ok: false, error: 'Invalid input: isVoice=true requires input.audioBase64.' };
+  }
+
+  return {
+    ok: true,
+    value: {
+      type: input.type,
+      content: clampPromptString(content, MAX_INPUT_CONTENT_LENGTH),
+      ...(isVoice ? { isVoice: true } : {}),
+      ...(audioBase64 ? { audioBase64 } : {}),
+      ...(audioMimeType ? { audioMimeType } : {}),
+    },
+  };
+};
+
+const validateState = (state: unknown): ValidationResult<GameState> => {
+  if (!ensureObject(state)) {
+    return { ok: false, error: 'Invalid state: expected object.' };
+  }
+
+  if (typeof state.id !== 'string' || !state.id.trim()) {
+    return { ok: false, error: 'Invalid state.id: expected non-empty string.' };
+  }
+
+  if (typeof state.title !== 'string' || !state.title.trim()) {
+    return { ok: false, error: 'Invalid state.title: expected non-empty string.' };
+  }
+
+  if (typeof state.tick !== 'number' || !Number.isFinite(state.tick) || state.tick < 0) {
+    return { ok: false, error: 'Invalid state.tick: expected non-negative number.' };
+  }
+
+  if (!ensureObject(state.world)) {
+    return { ok: false, error: 'Invalid state.world: expected object.' };
+  }
+
+  if (typeof state.world.currentLocationId !== 'string' || !state.world.currentLocationId.trim()) {
+    return { ok: false, error: 'Invalid state.world.currentLocationId: expected non-empty string.' };
+  }
+
+  if (typeof state.world.time !== 'string' || !state.world.time.trim()) {
+    return { ok: false, error: 'Invalid state.world.time: expected non-empty string.' };
+  }
+
+  if (!Array.isArray(state.world.facts)) {
+    return { ok: false, error: 'Invalid state.world.facts: expected string array.' };
+  }
+
+  const facts = state.world.facts
+    .filter((fact): fact is string => typeof fact === 'string' && fact.trim().length > 0)
+    .slice(0, MAX_FACTS_ITEMS)
+    .map((fact) => clampPromptString(fact.trim()));
+
+  if (!ensureObject(state.world.locations)) {
+    return { ok: false, error: 'Invalid state.world.locations: expected object map.' };
+  }
+
+  const rawLocations = Object.entries(state.world.locations);
+  if (rawLocations.length > MAX_LOCATIONS) {
+    return { ok: false, error: `Invalid state.world.locations: max ${MAX_LOCATIONS} locations.` };
+  }
+
+  const locations: GameState['world']['locations'] = {};
+  for (const [locationId, location] of rawLocations) {
+    if (!ensureObject(location)) {
+      return { ok: false, error: `Invalid state.world.locations.${locationId}: expected object.` };
+    }
+    if (typeof location.id !== 'string' || !location.id.trim() || typeof location.name !== 'string' || !location.name.trim() || typeof location.description !== 'string' || !location.description.trim()) {
+      return { ok: false, error: `Invalid state.world.locations.${locationId}: fields id/name/description must be non-empty strings.` };
+    }
+
+    locations[locationId] = {
+      id: location.id.trim(),
+      name: clampPromptString(location.name.trim()),
+      description: clampPromptString(location.description.trim()),
+    };
+  }
+
+  if (!Array.isArray(state.characters) || state.characters.length === 0 || state.characters.length > MAX_CHARACTERS) {
+    return { ok: false, error: `Invalid state.characters: expected 1-${MAX_CHARACTERS} items.` };
+  }
+
+  const characters: GameState['characters'] = [];
+  for (let i = 0; i < state.characters.length; i += 1) {
+    const character = state.characters[i];
+    if (!ensureObject(character) || !ensureObject(character.emotions)) {
+      return { ok: false, error: `Invalid state.characters[${i}]: expected object with emotions.` };
+    }
+
+    if (
+      typeof character.id !== 'string' ||
+      typeof character.name !== 'string' ||
+      typeof character.role !== 'string' ||
+      typeof character.description !== 'string' ||
+      typeof character.status !== 'string' ||
+      !character.id.trim() ||
+      !character.name.trim() ||
+      !character.role.trim() ||
+      !character.description.trim() ||
+      !character.status.trim()
+    ) {
+      return { ok: false, error: `Invalid state.characters[${i}]: id/name/role/description/status must be non-empty strings.` };
+    }
+
+    characters.push({
+      id: character.id.trim(),
+      name: clampPromptString(character.name.trim()),
+      role: clampPromptString(character.role.trim()),
+      description: clampPromptString(character.description.trim()),
+      status: clampPromptString(character.status.trim()),
+      emotions: {
+        trust: asNumber(character.emotions.trust, 50),
+        fear: asNumber(character.emotions.fear, 50),
+        anger: asNumber(character.emotions.anger, 50),
+        hope: asNumber(character.emotions.hope, 50),
+      },
+    });
+  }
+
+  if (!Array.isArray(state.storyCards) || state.storyCards.length > MAX_STORY_CARDS) {
+    return { ok: false, error: `Invalid state.storyCards: expected array with max ${MAX_STORY_CARDS} items.` };
+  }
+
+  const storyCards: GameState['storyCards'] = [];
+  for (let i = 0; i < state.storyCards.length; i += 1) {
+    const card = state.storyCards[i];
+    if (!ensureObject(card) || !Array.isArray(card.keys)) {
+      return { ok: false, error: `Invalid state.storyCards[${i}]: expected object with keys array.` };
+    }
+
+    if (typeof card.id !== 'string' || typeof card.title !== 'string' || typeof card.entry !== 'string' || !card.id.trim() || !card.title.trim() || !card.entry.trim()) {
+      return { ok: false, error: `Invalid state.storyCards[${i}]: id/title/entry must be non-empty strings.` };
+    }
+
+    const keys = card.keys
+      .filter((key): key is string => typeof key === 'string' && key.trim().length > 0)
+      .slice(0, MAX_STORY_CARD_KEYS)
+      .map((key) => clampPromptString(key.trim(), 120));
+
+    storyCards.push({
+      id: card.id.trim(),
+      title: clampPromptString(card.title.trim()),
+      entry: clampPromptString(card.entry.trim()),
+      keys,
+      ...(card.isActive === true ? { isActive: true } : {}),
+      ...(typeof card.characterId === 'string' && card.characterId.trim() ? { characterId: card.characterId.trim() } : {}),
+      ...(typeof card.locationId === 'string' && card.locationId.trim() ? { locationId: card.locationId.trim() } : {}),
+    });
+  }
+
+  if (!ensureObject(state.storyDNA) || !ensureObject(state.directorState)) {
+    return { ok: false, error: 'Invalid state.storyDNA or state.directorState: expected objects.' };
+  }
+
+  if (state.directorState.pacing !== 'Slow' && state.directorState.pacing !== 'Normal' && state.directorState.pacing !== 'Fast') {
+    return { ok: false, error: 'Invalid state.directorState.pacing: expected Slow, Normal, or Fast.' };
+  }
+
+  if (!Array.isArray(state.directorState.suggestedHints)) {
+    return { ok: false, error: 'Invalid state.directorState.suggestedHints: expected string array.' };
+  }
+
+  if (!Array.isArray(state.history)) {
+    return { ok: false, error: 'Invalid state.history: expected array.' };
+  }
+
+  const history = state.history
+    .filter((entry): entry is GameState['history'][number] => ensureObject(entry) && typeof entry.id === 'string' && typeof entry.tick === 'number' && typeof entry.timestamp === 'number' && typeof entry.description === 'string' && typeof entry.type === 'string')
+    .slice(-MAX_HISTORY_ITEMS)
+    .map((entry) => ({
+      id: entry.id.trim() || 'unknown',
+      tick: Math.max(0, Math.round(entry.tick)),
+      timestamp: Math.max(0, Math.round(entry.timestamp)),
+      type: entry.type === 'PLAYER' || entry.type === 'DIRECTOR' || entry.type === 'NARRATOR' ? entry.type : 'PLAYER',
+      description: clampPromptString(entry.description.trim()),
+      ...(typeof entry.audioBase64 === 'string' ? { audioBase64: entry.audioBase64 } : {}),
+      ...(typeof entry.audioMimeType === 'string' ? { audioMimeType: entry.audioMimeType } : {}),
+    }));
+
+  const validatedState: GameState = {
+    id: state.id.trim(),
+    title: clampPromptString(state.title.trim()),
+    tick: Math.max(0, Math.round(state.tick)),
+    ...(typeof state.lastPlayed === 'number' && Number.isFinite(state.lastPlayed) ? { lastPlayed: Math.max(0, Math.round(state.lastPlayed)) } : {}),
+    world: {
+      currentLocationId: state.world.currentLocationId.trim(),
+      time: clampPromptString(state.world.time.trim()),
+      locations,
+      facts,
+    },
+    characters,
+    storyCards,
+    storyDNA: {
+      orderChaos: asNumber(state.storyDNA.orderChaos, 50),
+      hopeDespair: asNumber(state.storyDNA.hopeDespair, 50),
+      trustBetrayal: asNumber(state.storyDNA.trustBetrayal, 50),
+    },
+    directorState: {
+      pacing: state.directorState.pacing,
+      tension: asNumber(state.directorState.tension, 50),
+      narrativeFocus:
+        typeof state.directorState.narrativeFocus === 'string' && state.directorState.narrativeFocus.trim()
+          ? clampPromptString(state.directorState.narrativeFocus.trim())
+          : 'Immediate consequences',
+      suggestedHints: asStringArray(state.directorState.suggestedHints, []).slice(0, 10).map((hint) => clampPromptString(hint, 160)),
+    },
+    history,
+    isProcessing: state.isProcessing === true,
+  };
+
+  return { ok: true, value: validatedState };
 };
 
 const rateLimitStore = new Map<string, RateLimitRecord>();
@@ -507,9 +792,27 @@ export default async function handler(req: any, res: any) {
     return;
   }
 
+  const bodyLengthCheck = validateBodyLength(req);
+  if (!bodyLengthCheck.ok) {
+    res.status(400).json({ error: bodyLengthCheck.error });
+    return;
+  }
+
   const { state, input } = req.body || {};
   if (!state || !input) {
     res.status(400).json({ error: 'Expected request body with { state, input }.' });
+    return;
+  }
+
+  const validatedState = validateState(state);
+  if (!validatedState.ok) {
+    res.status(400).json({ error: validatedState.error });
+    return;
+  }
+
+  const validatedInput = validateInput(input);
+  if (!validatedInput.ok) {
+    res.status(400).json({ error: validatedInput.error });
     return;
   }
 
@@ -517,8 +820,8 @@ export default async function handler(req: any, res: any) {
   const start = Date.now();
 
   try {
-    const gameState = state as GameState;
-    const playerInput = input as PlayerInput;
+    const gameState = validatedState.value;
+    const playerInput = validatedInput.value;
 
     const semanticCards = await getSemanticMatchedCards(client, gameState, playerInput);
     const usedKeywordFallback = semanticCards === null;
@@ -549,7 +852,7 @@ export default async function handler(req: any, res: any) {
       const fallbackReason = `Director response invalid JSON/shape; applied safe fallback state. (${error instanceof Error ? error.message : 'Unknown error'})`;
       traceMetadata.fallbackReason = fallbackReason;
       traceMetadata.warnings = [...(traceMetadata.warnings ?? []), fallbackReason];
-      agent2 = buildSafeAgent2Fallback(state as GameState, agent1.transcript);
+      agent2 = buildSafeAgent2Fallback(gameState, agent1.transcript);
       stageLatenciesMs['agent2:director_world'] = stageLatenciesMs['agent2:director_world'] ?? 0;
     }
 
