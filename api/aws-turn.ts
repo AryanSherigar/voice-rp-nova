@@ -1,10 +1,25 @@
 import { GoogleGenAI } from '@google/genai';
+import type { GameState, PlayerInput, TurnResponse, DirectorAgentResponse, WorldUpdateResponse } from '../types';
 
-const MODEL_NAME = 'gemini-3-flash-preview';
+const NARRATOR_MODEL = 'gemini-2.5-flash'; // Agent 1 (Nova 2 Sonic equivalent)
+const DIRECTOR_MODEL = 'gemini-2.5-flash-lite'; // Agent 2 (Nova 2 Lite equivalent)
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_REQUESTS = 20;
 
 type RateLimitRecord = { count: number; windowStart: number };
+
+type Agent1Response = {
+  transcript: string;
+  audio?: {
+    mimeType: string;
+    payload: string;
+  };
+};
+
+type Agent2Response = {
+  director: DirectorAgentResponse;
+  world: WorldUpdateResponse;
+};
 
 const rateLimitStore = new Map<string, RateLimitRecord>();
 
@@ -54,113 +69,240 @@ const isAuthorized = (req: any): boolean => {
   return req.headers['x-turn-token'] === serverSecret;
 };
 
-const getActiveStoryCards = (state: any, input: any): string => {
+const asNumber = (value: unknown, fallback: number, min = 0, max = 100): number => {
+  const n = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, Math.round(n)));
+};
+
+const asStringArray = (value: unknown, fallback: string[] = []): string[] => {
+  if (!Array.isArray(value)) return fallback;
+  return value.filter((v): v is string => typeof v === 'string').map((v) => v.trim()).filter(Boolean);
+};
+
+const sanitizeJsonText = (rawText: string): string =>
+  rawText
+    .replace(/^```json\s*/i, '')
+    .replace(/^```\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .trim();
+
+const getActiveStoryCards = (state: GameState, input: PlayerInput): string => {
   if (!state.storyCards || state.storyCards.length === 0) return '';
 
   const recentHistoryText = state.history
     .slice(-3)
-    .map((h: any) => h.description)
+    .map((h) => h.description)
     .join(' ')
     .toLowerCase();
 
   const inputText = input.content.toLowerCase();
   const combinedText = `${recentHistoryText} ${inputText}`;
 
-  const matchedCards = state.storyCards.filter((card: any) => {
-    return card.keys.some((key: string) => {
+  const matchedCards = state.storyCards.filter((card) =>
+    card.keys.some((key) => {
       const cleanKey = key.trim().toLowerCase();
       if (!cleanKey) return false;
       return combinedText.includes(cleanKey);
-    });
-  });
+    }),
+  );
 
   if (matchedCards.length === 0) return '';
 
-  return matchedCards.map((card: any) => `[World Info - ${card.title}]: ${card.entry}`).join('\n');
+  return matchedCards.map((card) => `[World Info - ${card.title}]: ${card.entry}`).join('\n');
 };
 
-const buildPrompt = (state: any, input: any): string => {
+const buildContext = (state: GameState, input: PlayerInput): string => {
   const characterContext = state.characters
     .map(
-      (c: any) =>
-        `ID[${c.id}] Name[${c.name}] Role[${c.role}]\n   - Status: ${c.status}\n   - Psychology: [Trust:${c.emotions.trust} (0=Paranoid, 100=Blind Faith), Fear:${c.emotions.fear} (0=Brave, 100=Terrified), Anger:${c.emotions.anger}, Hope:${c.emotions.hope}]\n   - Description: ${c.description}`,
+      (c) =>
+        `ID[${c.id}] Name[${c.name}] Role[${c.role}]\n- Status: ${c.status}\n- Psychology: [Trust:${c.emotions.trust}, Fear:${c.emotions.fear}, Anger:${c.emotions.anger}, Hope:${c.emotions.hope}]\n- Description: ${c.description}`,
     )
     .join('\n');
 
   const historyContext = state.history
     .slice(-8)
-    .map((h: any) => `[${h.type}] ${h.description}`)
+    .map((h) => `[${h.type}] ${h.description}`)
     .join('\n');
 
-  const storyCardContext = getActiveStoryCards(state, input);
+  const activeCards = getActiveStoryCards(state, input);
+  const location = state.world.locations[state.world.currentLocationId];
 
-  return `
-    You are the CORE ENGINE of an advanced interactive role-play simulation.
-    Return ONLY strict JSON for this schema:
-    {
-      "narrator": {
-        "transcript": string,
-        "audio": { "mimeType": string, "payload": string } // optional
-      },
-      "director": {
-        "pacing": "Slow" | "Normal" | "Fast",
-        "tension": number,
-        "narrativeFocus": string,
-        "suggestedHints": string[]
-      },
-      "world": {
-        "narrative": string,
-        "characterUpdates": [
-          {
-            "id": string,
-            "emotions": { "trust": number, "fear": number, "anger": number, "hope": number },
-            "status": string
-          }
-        ],
-        "newFacts": string[],
-        "dnaShift": { "orderChaos": number, "hopeDespair": number, "trustBetrayal": number }
-      },
-      "trace": {
-        "agentNames": string[],
-        "latencyMs": number
+  return [
+    `Title: ${state.title}`,
+    `Location: ${location?.name ?? 'Unknown'} (${location?.description ?? 'Unknown location'})`,
+    `Time/Context: ${state.world.time}`,
+    `DNA: orderChaos=${state.storyDNA.orderChaos}, hopeDespair=${state.storyDNA.hopeDespair}, trustBetrayal=${state.storyDNA.trustBetrayal}`,
+    `Director override: tension=${state.directorState.tension}, pacing=${state.directorState.pacing}, focus=${state.directorState.narrativeFocus}`,
+    `Characters:\n${characterContext}`,
+    `Facts: ${state.world.facts.slice(-5).join('; ') || 'none'}`,
+    activeCards ? `Triggered lore:\n${activeCards}` : '',
+    `Recent history:\n${historyContext || 'none'}`,
+    `Player input type=${input.type}`,
+    `Player input text="${input.content}"`,
+    input.isVoice && input.audioBase64 ? `Player audio provided, mimeType=${input.audioMimeType ?? 'unknown'}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+};
+
+const buildAgent1Prompt = (context: string): string => `
+You are Agent 1 (Nova 2 Sonic). Produce the narrator transcript from context + player input.
+Return strict JSON only:
+{
+  "transcript": string,
+  "audio": { "mimeType": string, "payload": string } // optional
+}
+Rules:
+- transcript is required and non-empty.
+- audio is optional. Include only if available.
+- No markdown or commentary.
+
+CONTEXT
+${context}
+`;
+
+const buildAgent2Prompt = (context: string, transcript: string): string => `
+You are Agent 2 (Nova 2 Lite). Use context + transcript and return strict JSON only:
+{
+  "director": {
+    "pacing": "Slow" | "Normal" | "Fast",
+    "tension": number,
+    "narrativeFocus": string,
+    "suggestedHints": string[]
+  },
+  "world": {
+    "narrative": string,
+    "characterUpdates": [
+      {
+        "id": string,
+        "emotions": { "trust": number, "fear": number, "anger": number, "hope": number },
+        "status": string
       }
-    }
+    ],
+    "newFacts": string[],
+    "dnaShift": { "orderChaos": number, "hopeDespair": number, "trustBetrayal": number }
+  }
+}
+Rules:
+- world.narrative must match transcript semantics.
+- Return strict JSON only.
+- No markdown or commentary.
 
-    Rules:
-    - narrator.transcript and world.narrative must contain the same story text.
-    - audio is optional; omit it if unavailable.
-    - trace is optional.
-    - No markdown, no separators, no prose outside JSON.
+CONTEXT
+${context}
 
-    CURRENT SIMULATION STATE
-    Title: ${state.title}
-    Location: ${state.world.locations[state.world.currentLocationId].name} (${state.world.locations[state.world.currentLocationId].description})
-    Time/Context: ${state.world.time}
+TRANSCRIPT
+${transcript}
+`;
 
-    STORY DNA
-    - OrderChaos: ${state.storyDNA.orderChaos}
-    - HopeDespair: ${state.storyDNA.hopeDespair}
-    - TrustBetrayal: ${state.storyDNA.trustBetrayal}
+const parseModelJson = <T>(rawText: string): T => JSON.parse(sanitizeJsonText(rawText)) as T;
 
-    DIRECTOR OVERRIDE
-    - Tension: ${state.directorState.tension}
-    - Pacing: ${state.directorState.pacing}
-    - Focus: ${state.directorState.narrativeFocus}
+const validateAgent1 = (candidate: unknown): Agent1Response => {
+  const value = candidate as Partial<Agent1Response>;
+  const transcript = typeof value?.transcript === 'string' ? value.transcript.trim() : '';
 
-    CHARACTERS
-    ${characterContext}
+  if (!transcript) {
+    throw new Error('Agent 1 response missing transcript');
+  }
 
-    FACTS
-    ${state.world.facts.slice(-5).join('; ')}
-    ${storyCardContext ? `Triggered Lore:\n${storyCardContext}` : ''}
+  const audio =
+    value?.audio &&
+    typeof value.audio.mimeType === 'string' &&
+    typeof value.audio.payload === 'string' &&
+    value.audio.mimeType.trim() &&
+    value.audio.payload.trim()
+      ? { mimeType: value.audio.mimeType.trim(), payload: value.audio.payload.trim() }
+      : undefined;
 
-    RECENT HISTORY
-    ${historyContext}
+  return { transcript, ...(audio ? { audio } : {}) };
+};
 
-    PLAYER INPUT
-    Type: ${input.type}
-    Content: "${input.content}"
-  `;
+const validateAgent2 = (candidate: unknown, transcript: string): Agent2Response => {
+  const value = candidate as Partial<Agent2Response>;
+  const directorSrc = value?.director ?? ({} as DirectorAgentResponse);
+  const worldSrc = value?.world ?? ({} as WorldUpdateResponse);
+
+  const pacing = directorSrc.pacing === 'Slow' || directorSrc.pacing === 'Fast' || directorSrc.pacing === 'Normal' ? directorSrc.pacing : 'Normal';
+  const director: DirectorAgentResponse = {
+    pacing,
+    tension: asNumber(directorSrc.tension, 50),
+    narrativeFocus: typeof directorSrc.narrativeFocus === 'string' && directorSrc.narrativeFocus.trim() ? directorSrc.narrativeFocus.trim() : 'Immediate consequences',
+    suggestedHints: asStringArray(directorSrc.suggestedHints, []),
+  };
+
+  const characterUpdates = Array.isArray(worldSrc.characterUpdates)
+    ? worldSrc.characterUpdates
+        .filter((u): u is NonNullable<WorldUpdateResponse['characterUpdates']>[number] => Boolean(u && typeof u.id === 'string' && u.id.trim()))
+        .map((u) => ({
+          id: u.id.trim(),
+          emotions: {
+            trust: asNumber(u.emotions?.trust, 50),
+            fear: asNumber(u.emotions?.fear, 50),
+            anger: asNumber(u.emotions?.anger, 50),
+            hope: asNumber(u.emotions?.hope, 50),
+          },
+          ...(typeof u.status === 'string' && u.status.trim() ? { status: u.status.trim() } : {}),
+        }))
+    : [];
+
+  const world: WorldUpdateResponse = {
+    narrative: transcript,
+    characterUpdates,
+    ...(Array.isArray(worldSrc.newFacts) ? { newFacts: asStringArray(worldSrc.newFacts, []) } : {}),
+    ...(worldSrc.dnaShift
+      ? {
+          dnaShift: {
+            orderChaos: asNumber(worldSrc.dnaShift.orderChaos, 50),
+            hopeDespair: asNumber(worldSrc.dnaShift.hopeDespair, 50),
+            trustBetrayal: asNumber(worldSrc.dnaShift.trustBetrayal, 50),
+          },
+        }
+      : {}),
+  };
+
+  return { director, world };
+};
+
+const assembleTurnResponse = (agent1: Agent1Response, agent2: Agent2Response, latencyMs: number): TurnResponse => ({
+  narrator: {
+    transcript: agent1.transcript,
+    ...(agent1.audio
+      ? {
+          audio: agent1.audio,
+          audioBase64: agent1.audio.payload,
+          audioMimeType: agent1.audio.mimeType,
+        }
+      : {}),
+  },
+  director: agent2.director,
+  world: agent2.world,
+  ...(agent1.audio
+    ? {
+        event: {
+          audioBase64: agent1.audio.payload,
+          audioMimeType: agent1.audio.mimeType,
+        },
+      }
+    : {}),
+  trace: {
+    agentNames: ['Nova 2 Sonic', 'Nova 2 Lite', 'Assembler'],
+    pipeline: ['agent1:narration', 'agent2:director_world', 'assembler:turn_response'],
+    latencyMs,
+  },
+});
+
+const callAgent = async (ai: GoogleGenAI, model: string, prompt: string): Promise<string> => {
+  const response = await ai.models.generateContent({
+    model,
+    contents: prompt,
+    config: {
+      responseMimeType: 'application/json',
+      temperature: 0.4,
+    },
+  });
+
+  return response.text || '';
 };
 
 export default async function handler(req: any, res: any) {
@@ -196,38 +338,21 @@ export default async function handler(req: any, res: any) {
   const start = Date.now();
 
   try {
-    const response = await ai.models.generateContent({
-      model: MODEL_NAME,
-      contents: buildPrompt(state, input),
-    });
+    const context = buildContext(state as GameState, input as PlayerInput);
 
-    const rawText = response.text || '';
-    const sanitizedJson = rawText
-      .replace(/^```json\s*/, '')
-      .replace(/^```\s*/, '')
-      .replace(/\s*```$/, '')
-      .trim();
+    const agent1Raw = await callAgent(ai, NARRATOR_MODEL, buildAgent1Prompt(context));
+    const agent1 = validateAgent1(parseModelJson<Agent1Response>(agent1Raw));
 
-    const parsed = JSON.parse(sanitizedJson);
-    const transcript = parsed?.narrator?.transcript ?? parsed?.world?.narrative ?? '';
+    const agent2Raw = await callAgent(ai, DIRECTOR_MODEL, buildAgent2Prompt(context, agent1.transcript));
+    const agent2 = validateAgent2(parseModelJson<Agent2Response>(agent2Raw), agent1.transcript);
 
-    res.status(200).json({
-      narrator: {
-        transcript,
-        ...(parsed?.narrator?.audio ? { audio: parsed.narrator.audio } : {}),
-      },
-      director: parsed?.director ?? state.directorState,
-      world: {
-        narrative: transcript,
-        characterUpdates: parsed?.world?.characterUpdates ?? [],
-        ...(parsed?.world?.newFacts ? { newFacts: parsed.world.newFacts } : {}),
-        ...(parsed?.world?.dnaShift ? { dnaShift: parsed.world.dnaShift } : {}),
-      },
-      trace: {
-        ...(parsed?.trace?.agentNames ? { agentNames: parsed.trace.agentNames } : { agentNames: ['narrator', 'director', 'world'] }),
-        latencyMs: Date.now() - start,
-      },
-    });
+    const response = assembleTurnResponse(agent1, agent2, Date.now() - start);
+
+    if (!response.narrator.transcript || !response.world.narrative || !response.director.pacing) {
+      throw new Error('Defensive response validation failed');
+    }
+
+    res.status(200).json(response);
   } catch (error) {
     console.error('Turn generation failed:', error);
     res.status(502).json({ error: 'Model request failed.' });
