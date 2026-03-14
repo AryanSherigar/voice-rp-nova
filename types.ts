@@ -64,6 +64,8 @@ export interface EventLogEntry {
   type: 'PLAYER' | 'DIRECTOR' | 'NARRATOR';
   description: string;
   timestamp: number;
+  audioBase64?: string;
+  audioMimeType?: string;
 }
 
 export interface GameState {
@@ -89,6 +91,9 @@ export enum InputType {
 export interface PlayerInput {
   type: InputType;
   content: string;
+  isVoice?: boolean;
+  audioBase64?: string;
+  audioMimeType?: string;
 }
 
 // Responses from turn engine
@@ -115,19 +120,26 @@ export interface NarratorAudioPayload {
   payload: string;
 }
 
-export interface TurnTraceMetadata {
+export interface TurnTrace {
   agentNames?: string[];
   latencyMs?: number;
+  pipeline?: string[];
 }
 
 export interface TurnResponse {
   narrator: {
     transcript: string;
     audio?: NarratorAudioPayload;
+    audioBase64?: string;
+    audioMimeType?: string;
   };
   director: DirectorAgentResponse;
   world: WorldUpdateResponse;
-  trace?: TurnTraceMetadata;
+  event?: {
+    audioBase64?: string;
+    audioMimeType?: string;
+  };
+  trace?: TurnTrace;
 }
 
 // --- Navigation & Creation Types ---
