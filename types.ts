@@ -124,6 +124,10 @@ export interface TurnTrace {
   agentNames?: string[];
   latencyMs?: number;
   pipeline?: string[];
+  metadata?: {
+    warnings?: string[];
+    fallbackReason?: string;
+  };
 }
 
 export interface TurnResponse {
