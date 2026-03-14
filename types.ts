@@ -131,18 +131,10 @@ export interface TurnTrace {
 }
 
 export interface TurnResponse {
-  narrator: {
-    transcript: string;
-    audio?: NarratorAudioPayload;
-    audioBase64?: string;
-    audioMimeType?: string;
-  };
+  transcript: string;
+  audio?: NarratorAudioPayload;
   director: DirectorAgentResponse;
   world: WorldUpdateResponse;
-  event?: {
-    audioBase64?: string;
-    audioMimeType?: string;
-  };
   trace?: TurnTrace;
 }
 

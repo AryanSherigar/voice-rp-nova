@@ -13,11 +13,11 @@ const isPacing = (value: unknown): value is 'Slow' | 'Normal' | 'Fast' => {
 
 export const isTurnResponse = (value: unknown): value is TurnResponse => {
   if (!isRecord(value)) return false;
-  if (!isRecord(value.narrator) || typeof value.narrator.transcript !== 'string') return false;
+  if (typeof value.transcript !== 'string') return false;
 
-  if (value.narrator.audio !== undefined) {
-    if (!isRecord(value.narrator.audio)) return false;
-    if (typeof value.narrator.audio.mimeType !== 'string' || typeof value.narrator.audio.payload !== 'string') return false;
+  if (value.audio !== undefined) {
+    if (!isRecord(value.audio)) return false;
+    if (typeof value.audio.mimeType !== 'string' || typeof value.audio.payload !== 'string') return false;
   }
 
   if (!isRecord(value.director)) return false;
