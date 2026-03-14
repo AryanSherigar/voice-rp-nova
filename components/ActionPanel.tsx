@@ -1,6 +1,8 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { InputType, PlayerInput } from '../types';
 import { Button } from './Button';
+
+type RecordingState = 'idle' | 'recording' | 'processing';
 
 interface Props {
   onInput: (input: PlayerInput) => void;
@@ -10,6 +12,11 @@ interface Props {
 export const ActionPanel: React.FC<Props> = ({ onInput, isProcessing }) => {
   const [activeTab, setActiveTab] = useState<InputType>(InputType.DO);
   const [content, setContent] = useState('');
+  const [recordingState, setRecordingState] = useState<RecordingState>('idle');
+  const [recordingError, setRecordingError] = useState<string | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -23,6 +30,110 @@ export const ActionPanel: React.FC<Props> = ({ onInput, isProcessing }) => {
     onInput({ type: InputType.STORY, content: "(The player observes and waits...)", isVoice: false });
     setContent('');
   };
+
+  useEffect(() => {
+    return () => {
+      if (mediaRecorderRef.current?.state === 'recording') {
+        mediaRecorderRef.current.stop();
+      }
+      mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+    };
+  }, []);
+
+  const blobToBase64 = (blob: Blob): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const result = reader.result;
+        if (typeof result !== 'string') {
+          reject(new Error('Unable to convert audio blob to base64.'));
+          return;
+        }
+
+        const [, payload = ''] = result.split(',');
+        resolve(payload);
+      };
+      reader.onerror = () => reject(reader.error ?? new Error('File read failed.'));
+      reader.readAsDataURL(blob);
+    });
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current?.state === 'recording') {
+      mediaRecorderRef.current.stop();
+    }
+  };
+
+  const startRecording = async () => {
+    if (isProcessing || recordingState !== 'idle') return;
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      setRecordingError('Voice recording is not supported in this browser.');
+      return;
+    }
+
+    try {
+      setRecordingError(null);
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+
+      mediaStreamRef.current = stream;
+      mediaRecorderRef.current = recorder;
+      audioChunksRef.current = [];
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      recorder.onstop = async () => {
+        setRecordingState('processing');
+        try {
+          const audioBlob = new Blob(audioChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
+          if (audioBlob.size === 0) {
+            setRecordingError('No audio captured. Try pressing and holding longer.');
+            return;
+          }
+
+          const audioBase64 = await blobToBase64(audioBlob);
+          const voiceInput: PlayerInput = {
+            type: activeTab,
+            content: content.trim() || '[Voice input]',
+            isVoice: true,
+            audioBase64,
+            audioMimeType: audioBlob.type || recorder.mimeType || 'audio/webm'
+          };
+          onInput(voiceInput);
+          setContent('');
+        } catch (error) {
+          console.error('Voice processing failed', error);
+          setRecordingError('Failed to process audio. Please try again.');
+        } finally {
+          mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+          mediaStreamRef.current = null;
+          mediaRecorderRef.current = null;
+          audioChunksRef.current = [];
+          setRecordingState('idle');
+        }
+      };
+
+      recorder.start();
+      setRecordingState('recording');
+    } catch (error) {
+      console.error('Microphone access denied', error);
+      setRecordingError('Microphone access denied or unavailable.');
+      mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+      mediaStreamRef.current = null;
+      mediaRecorderRef.current = null;
+      setRecordingState('idle');
+    }
+  };
+
+  const recordingStateLabel =
+    recordingState === 'recording'
+      ? 'Recording… release to send'
+      : recordingState === 'processing'
+        ? 'Processing voice input…'
+        : 'Hold mic to record';
 
   const tabs = [
     { id: InputType.DO, icon: <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>, label: 'Do' },
@@ -66,12 +177,16 @@ export const ActionPanel: React.FC<Props> = ({ onInput, isProcessing }) => {
               placeholder={`What do you ${activeTab.toLowerCase()}?`}
               className="w-full bg-navy-950 border border-navy-700 rounded-lg p-3 text-sm text-slate-200 focus:outline-none focus:border-teal-600 focus:ring-1 focus:ring-teal-600/20 placeholder-slate-700 resize-none h-20"
            />
-           <div className="absolute bottom-2 right-2 flex gap-2">
+           <div className="absolute bottom-2 right-2 flex flex-col items-end gap-1">
+               <span className={`text-[10px] ${recordingState === 'recording' ? 'text-red-400' : recordingState === 'processing' ? 'text-amber-400' : 'text-slate-500'}`}>
+                   {recordingError ?? recordingStateLabel}
+               </span>
+               <div className="flex gap-2">
                <Button 
                    type="button" 
                    variant="secondary" 
                    onClick={handleContinue}
-                   disabled={isProcessing}
+                   disabled={isProcessing || recordingState !== 'idle'}
                    title="Advance the story without acting"
                    className="!py-1.5 !px-3 !text-[10px] !bg-navy-800 hover:!bg-navy-700 border border-navy-700 text-slate-400 hover:text-teal-400"
                >
@@ -81,13 +196,32 @@ export const ActionPanel: React.FC<Props> = ({ onInput, isProcessing }) => {
                    Continue
                </Button>
                <Button 
+                   type="button"
+                   variant="secondary"
+                   onMouseDown={startRecording}
+                   onMouseUp={stopRecording}
+                   onMouseLeave={stopRecording}
+                   onTouchStart={startRecording}
+                   onTouchEnd={stopRecording}
+                   onTouchCancel={stopRecording}
+                   disabled={isProcessing || recordingState === 'processing'}
+                   title="Hold to record voice input"
+                   className={`!py-1.5 !px-3 !text-[10px] border ${recordingState === 'recording' ? '!bg-red-700 border-red-500 text-white' : '!bg-navy-800 border-navy-700 text-slate-300 hover:!bg-navy-700'}`}
+               >
+                   <svg className="w-3 h-3 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 1v11m0 0a3 3 0 003-3V7a3 3 0 10-6 0v2a3 3 0 003 3zm6 0v1a6 6 0 11-12 0v-1m6 7v4m-4 0h8" />
+                   </svg>
+                   {recordingState === 'recording' ? 'Recording' : recordingState === 'processing' ? 'Processing' : 'Hold to Talk'}
+               </Button>
+               <Button 
                    type="submit" 
-                   disabled={!content.trim()} 
+                   disabled={!content.trim() || recordingState !== 'idle'} 
                    isLoading={isProcessing && !!content} 
                    className="!py-1.5 !px-3 !text-[10px]"
                >
                    Confirm
                </Button>
+               </div>
            </div>
         </form>
       </div>
