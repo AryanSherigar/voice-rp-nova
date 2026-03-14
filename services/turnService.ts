@@ -1,7 +1,7 @@
 import { GameState, PlayerInput, TurnResponse } from '../types';
 
 const PRIMARY_TURN_ENDPOINT = '/api/turn';
-const GEMINI_FALLBACK_TURN_ENDPOINT = '/api/aws-turn';
+const FALLBACK_TURN_ENDPOINT = '/api/aws-turn';
 
 const isRecord = (value: unknown): value is Record<string, unknown> => {
   return typeof value === 'object' && value !== null;
@@ -61,7 +61,7 @@ export const executeTurn = async (state: GameState, input: PlayerInput): Promise
   try {
     return await postTurn(PRIMARY_TURN_ENDPOINT, state, input);
   } catch (error) {
-    console.warn('Primary turn route failed; falling back to Gemini route during migration.', error);
-    return postTurn(GEMINI_FALLBACK_TURN_ENDPOINT, state, input);
+    console.warn('Primary turn route failed; falling back to secondary turn route.', error);
+    return postTurn(FALLBACK_TURN_ENDPOINT, state, input);
   }
 };
