@@ -26,7 +26,7 @@ import {
   Location,
   DirectorDecision
 } from './types';
-import { executeTurn } from './services/geminiService';
+import { executeTurn } from './services/turnService';
 
 const SYSTEM_STABILIZED_MESSAGE = '[SYSTEM: Cognitive divergence detected. World state stabilized.]';
 const SYSTEM_MISSING_TERMINAL_MESSAGE = '[SYSTEM: Turn finalized with fallback (missing terminal chunk).]';
