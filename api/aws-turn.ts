@@ -22,6 +22,11 @@ type Agent2Response = {
   world: WorldUpdateResponse;
 };
 
+type TraceMetadata = {
+  warnings?: string[];
+  fallbackReason?: string;
+};
+
 const rateLimitStore = new Map<string, RateLimitRecord>();
 
 const getClientIp = (req: any): string => {
@@ -265,7 +270,59 @@ const validateAgent2 = (candidate: unknown, transcript: string): Agent2Response 
   return { director, world };
 };
 
-const assembleTurnResponse = (agent1: Agent1Response, agent2: Agent2Response, latencyMs: number): TurnResponse => ({
+const extractTranscriptFromRawAgent1 = (rawText: string): string | null => {
+  const sanitized = sanitizeJsonText(rawText);
+  const transcriptMatch = sanitized.match(/"transcript"\s*:\s*("(?:\\.|[^"\\])*")/s);
+
+  if (!transcriptMatch) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(transcriptMatch[1]) as string;
+    const trimmed = typeof parsed === 'string' ? parsed.trim() : '';
+    return trimmed || null;
+  } catch {
+    return null;
+  }
+};
+
+const parseAgent1Response = (rawText: string): { response: Agent1Response; warning?: string } => {
+  try {
+    return { response: validateAgent1(parseModelJson<Agent1Response>(rawText)) };
+  } catch (error) {
+    const transcript = extractTranscriptFromRawAgent1(rawText);
+    if (transcript) {
+      return {
+        response: { transcript },
+        warning: `Narrator audio payload failed validation; continued with transcript-only response. (${error instanceof Error ? error.message : 'Unknown error'})`,
+      };
+    }
+
+    throw error;
+  }
+};
+
+const buildSafeAgent2Fallback = (state: GameState, transcript: string): Agent2Response => ({
+  director: {
+    pacing: state.directorState.pacing === 'Slow' || state.directorState.pacing === 'Fast' || state.directorState.pacing === 'Normal' ? state.directorState.pacing : 'Normal',
+    tension: asNumber(state.directorState.tension, 50),
+    narrativeFocus: typeof state.directorState.narrativeFocus === 'string' && state.directorState.narrativeFocus.trim() ? state.directorState.narrativeFocus.trim() : 'Immediate consequences',
+    suggestedHints: asStringArray(state.directorState.suggestedHints, []),
+  },
+  world: {
+    narrative: transcript,
+    characterUpdates: [],
+    newFacts: [],
+    dnaShift: {
+      orderChaos: asNumber(state.storyDNA.orderChaos, 50),
+      hopeDespair: asNumber(state.storyDNA.hopeDespair, 50),
+      trustBetrayal: asNumber(state.storyDNA.trustBetrayal, 50),
+    },
+  },
+});
+
+const assembleTurnResponse = (agent1: Agent1Response, agent2: Agent2Response, latencyMs: number, traceMetadata?: TraceMetadata): TurnResponse => ({
   narrator: {
     transcript: agent1.transcript,
     ...(agent1.audio
@@ -290,6 +347,7 @@ const assembleTurnResponse = (agent1: Agent1Response, agent2: Agent2Response, la
     agentNames: ['Nova 2 Sonic', 'Nova 2 Lite', 'Assembler'],
     pipeline: ['agent1:narration', 'agent2:director_world', 'assembler:turn_response'],
     latencyMs,
+    ...(traceMetadata ? { metadata: traceMetadata } : {}),
   },
 });
 
@@ -357,12 +415,25 @@ export default async function handler(req: any, res: any) {
     const context = buildContext(state as GameState, input as PlayerInput);
 
     const agent1Raw = await callAgent(client, NARRATOR_MODEL, buildAgent1Prompt(context));
-    const agent1 = validateAgent1(parseModelJson<Agent1Response>(agent1Raw));
+    const parsedAgent1 = parseAgent1Response(agent1Raw);
+    const agent1 = parsedAgent1.response;
 
-    const agent2Raw = await callAgent(client, DIRECTOR_MODEL, buildAgent2Prompt(context, agent1.transcript));
-    const agent2 = validateAgent2(parseModelJson<Agent2Response>(agent2Raw), agent1.transcript);
+    const traceMetadata: TraceMetadata = {
+      ...(parsedAgent1.warning ? { warnings: [parsedAgent1.warning] } : {}),
+    };
 
-    const response = assembleTurnResponse(agent1, agent2, Date.now() - start);
+    let agent2: Agent2Response;
+    try {
+      const agent2Raw = await callAgent(client, DIRECTOR_MODEL, buildAgent2Prompt(context, agent1.transcript));
+      agent2 = validateAgent2(parseModelJson<Agent2Response>(agent2Raw), agent1.transcript);
+    } catch (error) {
+      const fallbackReason = `Director response invalid JSON/shape; applied safe fallback state. (${error instanceof Error ? error.message : 'Unknown error'})`;
+      traceMetadata.fallbackReason = fallbackReason;
+      traceMetadata.warnings = [...(traceMetadata.warnings ?? []), fallbackReason];
+      agent2 = buildSafeAgent2Fallback(state as GameState, agent1.transcript);
+    }
+
+    const response = assembleTurnResponse(agent1, agent2, Date.now() - start, Object.keys(traceMetadata).length > 0 ? traceMetadata : undefined);
 
     if (!response.narrator.transcript || !response.world.narrative || !response.director.pacing) {
       throw new Error('Defensive response validation failed');
