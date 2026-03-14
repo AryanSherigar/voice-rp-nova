@@ -1,6 +1,12 @@
 import { GameState } from '../types';
 
 const STORAGE_KEY = 'rp_agent_saves_v2';
+const SAVE_SCHEMA_VERSION = 1;
+
+interface SavesPayload {
+  schemaVersion: number;
+  saves: Record<string, GameState>;
+}
 
 export interface SaveMetadata {
   id: string;
@@ -17,9 +23,12 @@ export interface SaveMetadata {
 export const saveGame = (state: GameState): void => {
   try {
     const saves = loadAllSavesRaw();
-    const updatedState = { ...state, lastPlayed: Date.now() };
+    const updatedState = {
+      ...sanitizeSaveState(state),
+      lastPlayed: Date.now()
+    };
     saves[state.id] = updatedState;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(saves));
+    writeSavesPayload(saves);
   } catch (e) {
     console.error("Failed to save game", e);
   }
@@ -45,7 +54,7 @@ export const deleteGame = (id: string): void => {
   try {
     const saves = loadAllSavesRaw();
     delete saves[id];
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(saves));
+    writeSavesPayload(saves);
   } catch (e) {
     console.error("Failed to delete save", e);
   }
@@ -71,9 +80,34 @@ export const getSavedGames = (): SaveMetadata[] => {
 const loadAllSavesRaw = (): Record<string, GameState> => {
   const json = localStorage.getItem(STORAGE_KEY);
   if (!json) return {};
+
   try {
-    return JSON.parse(json);
+    const parsed = JSON.parse(json) as Record<string, GameState> | SavesPayload;
+
+    // Backward compatibility for older storage payloads that persisted raw map directly.
+    if (!('schemaVersion' in parsed) || !('saves' in parsed)) {
+      return parsed as Record<string, GameState>;
+    }
+
+    return parsed.saves;
   } catch {
     return {};
   }
 };
+
+const writeSavesPayload = (saves: Record<string, GameState>): void => {
+  const payload: SavesPayload = {
+    schemaVersion: SAVE_SCHEMA_VERSION,
+    saves
+  };
+
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+};
+
+const sanitizeSaveState = (state: GameState): GameState => ({
+  ...state,
+  history: state.history.map(entry => {
+    const { audioBase64: _audioBase64, ...safeEntry } = entry;
+    return safeEntry;
+  })
+});
