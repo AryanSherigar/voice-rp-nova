@@ -124,6 +124,7 @@ export interface TurnTrace {
   agentNames?: string[];
   latencyMs?: number;
   pipeline?: string[];
+  stageLatenciesMs?: Record<string, number>;
   metadata?: {
     warnings?: string[];
     fallbackReason?: string;

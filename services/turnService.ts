@@ -33,6 +33,15 @@ export const isTurnResponse = (value: unknown): value is TurnResponse => {
     if (!isRecord(value.trace)) return false;
     if (value.trace.agentNames !== undefined && (!Array.isArray(value.trace.agentNames) || !value.trace.agentNames.every(a => typeof a === 'string'))) return false;
     if (value.trace.latencyMs !== undefined && typeof value.trace.latencyMs !== 'number') return false;
+    if (value.trace.stageLatenciesMs !== undefined) {
+      if (!isRecord(value.trace.stageLatenciesMs)) return false;
+      if (!Object.values(value.trace.stageLatenciesMs).every(v => typeof v === 'number')) return false;
+    }
+    if (value.trace.metadata !== undefined) {
+      if (!isRecord(value.trace.metadata)) return false;
+      if (value.trace.metadata.warnings !== undefined && (!Array.isArray(value.trace.metadata.warnings) || !value.trace.metadata.warnings.every(w => typeof w === 'string'))) return false;
+      if (value.trace.metadata.fallbackReason !== undefined && typeof value.trace.metadata.fallbackReason !== 'string') return false;
+    }
   }
 
   return true;

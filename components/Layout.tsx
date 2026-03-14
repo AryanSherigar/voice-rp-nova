@@ -10,6 +10,7 @@ interface Props {
   showExit?: boolean;
   isDirectorMode?: boolean;
   onToggleDirector?: () => void;
+  tracePanel?: React.ReactNode;
 }
 
 export const Layout: React.FC<Props> = ({ 
@@ -20,7 +21,8 @@ export const Layout: React.FC<Props> = ({
   onExit, 
   showExit,
   isDirectorMode,
-  onToggleDirector
+  onToggleDirector,
+  tracePanel
 }) => {
   const [showMobileLeft, setShowMobileLeft] = useState(false);
   const [showMobileRight, setShowMobileRight] = useState(false);
@@ -45,6 +47,8 @@ export const Layout: React.FC<Props> = ({
         </div>
 
         <div className="flex items-center gap-3">
+           {tracePanel && <div className="hidden md:block">{tracePanel}</div>}
+
            {onToggleDirector && (
                <button 
                   onClick={onToggleDirector}
@@ -76,6 +80,7 @@ export const Layout: React.FC<Props> = ({
 
       {/* Main Content Grid */}
       <div className="flex-1 flex overflow-hidden relative">
+        {tracePanel && <div className="md:hidden absolute top-2 right-2 z-40">{tracePanel}</div>}
         
         {/* Left Sidebar (Desktop) */}
         {leftSidebar && (
