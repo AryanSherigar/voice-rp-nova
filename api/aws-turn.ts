@@ -323,26 +323,10 @@ const buildSafeAgent2Fallback = (state: GameState, transcript: string): Agent2Re
 });
 
 const assembleTurnResponse = (agent1: Agent1Response, agent2: Agent2Response, latencyMs: number, traceMetadata?: TraceMetadata): TurnResponse => ({
-  narrator: {
-    transcript: agent1.transcript,
-    ...(agent1.audio
-      ? {
-          audio: agent1.audio,
-          audioBase64: agent1.audio.payload,
-          audioMimeType: agent1.audio.mimeType,
-        }
-      : {}),
-  },
+  transcript: agent1.transcript,
+  ...(agent1.audio ? { audio: agent1.audio } : {}),
   director: agent2.director,
   world: agent2.world,
-  ...(agent1.audio
-    ? {
-        event: {
-          audioBase64: agent1.audio.payload,
-          audioMimeType: agent1.audio.mimeType,
-        },
-      }
-    : {}),
   trace: {
     agentNames: ['Nova 2 Sonic', 'Nova 2 Lite', 'Assembler'],
     pipeline: ['agent1:narration', 'agent2:director_world', 'assembler:turn_response'],
@@ -435,7 +419,7 @@ export default async function handler(req: any, res: any) {
 
     const response = assembleTurnResponse(agent1, agent2, Date.now() - start, Object.keys(traceMetadata).length > 0 ? traceMetadata : undefined);
 
-    if (!response.narrator.transcript || !response.world.narrative || !response.director.pacing) {
+    if (!response.transcript || !response.world.narrative || !response.director.pacing) {
       throw new Error('Defensive response validation failed');
     }
 

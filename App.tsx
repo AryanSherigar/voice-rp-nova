@@ -73,29 +73,17 @@ function gameReducer(state: GameState | null, action: Action): GameState | null 
       return { ...state, history: [...state.history, action.payload] };
 
     case 'STREAM_UPDATE': {
-      const lastEntry = state.history[state.history.length - 1];
-      let newHistory = [...state.history];
+      const narratorEntry: EventLogEntry = {
+        id: `evt_${Date.now()}`,
+        tick: state.tick + 1,
+        type: 'NARRATOR',
+        description: action.payload.description,
+        timestamp: Date.now(),
+        audioBase64: action.payload.audioBase64,
+        audioMimeType: action.payload.audioMimeType
+      };
 
-      if (lastEntry.type === 'PLAYER' || lastEntry.type === 'DIRECTOR') {
-        newHistory.push({
-          id: `evt_${Date.now()}`,
-          tick: state.tick + 1,
-          type: 'NARRATOR',
-          description: action.payload.description,
-          timestamp: Date.now(),
-          audioBase64: action.payload.audioBase64,
-          audioMimeType: action.payload.audioMimeType
-        });
-      } else if (lastEntry.type === 'NARRATOR') {
-        newHistory[newHistory.length - 1] = {
-          ...lastEntry,
-          description: action.payload.description,
-          audioBase64: action.payload.audioBase64,
-          audioMimeType: action.payload.audioMimeType
-        };
-      }
-
-      return { ...state, history: newHistory };
+      return { ...state, history: [...state.history, narratorEntry] };
     }
 
     case 'END_TURN':
@@ -259,9 +247,7 @@ export default function App() {
     if (!gameState) return;
 
     const fallbackTurnPayload: TurnResponse = {
-      narrator: {
-        transcript: 'World state stabilized after a transient systems anomaly.'
-      },
+      transcript: 'World state stabilized after a transient systems anomaly.',
       director: gameState.directorState,
       world: {
         narrative: 'World state stabilized after a transient systems anomaly.',
@@ -301,9 +287,9 @@ export default function App() {
       dispatch({
         type: 'STREAM_UPDATE',
         payload: {
-          description: fallbackTurnPayload.narrator.transcript,
-          audioBase64: fallbackTurnPayload.narrator.audioBase64 ?? fallbackTurnPayload.event?.audioBase64,
-          audioMimeType: fallbackTurnPayload.narrator.audioMimeType ?? fallbackTurnPayload.event?.audioMimeType
+          description: fallbackTurnPayload.transcript,
+          audioBase64: fallbackTurnPayload.audio?.payload,
+          audioMimeType: fallbackTurnPayload.audio?.mimeType
         }
       });
       dispatch({ type: 'END_TURN', payload: { director: fallbackTurnPayload.director, world: fallbackTurnPayload.world } });
@@ -322,9 +308,9 @@ export default function App() {
       dispatch({
         type: 'STREAM_UPDATE',
         payload: {
-          description: turnResponse.narrator.transcript,
-          audioBase64: turnResponse.narrator.audioBase64 ?? turnResponse.event?.audioBase64,
-          audioMimeType: turnResponse.narrator.audioMimeType ?? turnResponse.event?.audioMimeType
+          description: turnResponse.transcript,
+          audioBase64: turnResponse.audio?.payload,
+          audioMimeType: turnResponse.audio?.mimeType
         }
       });
       dispatch({ type: 'END_TURN', payload: { director: turnResponse.director, world: turnResponse.world } });
