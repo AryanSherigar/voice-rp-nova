@@ -3,9 +3,12 @@ import type { GameState, PlayerInput, TurnResponse, DirectorAgentResponse, World
 
 const NARRATOR_MODEL = process.env.BEDROCK_NARRATOR_MODEL_ID;
 const DIRECTOR_MODEL = process.env.BEDROCK_DIRECTOR_MODEL_ID;
+const EMBEDDING_MODEL = process.env.BEDROCK_EMBEDDING_MODEL_ID;
 const BEDROCK_REGION = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION;
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_REQUESTS = 20;
+const STORY_CARD_TOP_K = Number.parseInt(process.env.STORY_CARD_TOP_K ?? '3', 10);
+const STORY_CARD_SIMILARITY_THRESHOLD = Number.parseFloat(process.env.STORY_CARD_SIMILARITY_THRESHOLD ?? '0.35');
 
 type RateLimitRecord = { count: number; windowStart: number };
 
@@ -27,7 +30,14 @@ type TraceMetadata = {
   fallbackReason?: string;
 };
 
+type EmbeddedStoryCard = {
+  title: string;
+  entry: string;
+  similarity?: number;
+};
+
 const rateLimitStore = new Map<string, RateLimitRecord>();
+const storyCardEmbeddingStore = new Map<string, number[]>();
 
 const getClientIp = (req: any): string => {
   const forwarded = req.headers['x-forwarded-for'];
@@ -93,8 +103,43 @@ const sanitizeJsonText = (rawText: string): string =>
     .replace(/\s*```$/i, '')
     .trim();
 
-const getActiveStoryCards = (state: GameState, input: PlayerInput): string => {
-  if (!state.storyCards || state.storyCards.length === 0) return '';
+const normalizeEmbedding = (embedding: number[]): number[] => {
+  const magnitude = Math.sqrt(embedding.reduce((sum, value) => sum + value * value, 0));
+  if (!Number.isFinite(magnitude) || magnitude === 0) {
+    return embedding;
+  }
+
+  return embedding.map((value) => value / magnitude);
+};
+
+const cosineSimilarity = (left: number[], right: number[]): number => {
+  if (left.length === 0 || right.length === 0 || left.length !== right.length) {
+    return -1;
+  }
+
+  let dot = 0;
+  for (let i = 0; i < left.length; i += 1) {
+    dot += left[i] * right[i];
+  }
+
+  return dot;
+};
+
+const parseEmbedding = (value: unknown): number[] | null => {
+  if (!Array.isArray(value) || value.length === 0) {
+    return null;
+  }
+
+  const embedding = value.filter((n): n is number => typeof n === 'number' && Number.isFinite(n));
+  if (embedding.length !== value.length) {
+    return null;
+  }
+
+  return normalizeEmbedding(embedding);
+};
+
+const getKeywordMatchedCards = (state: GameState, input: PlayerInput): EmbeddedStoryCard[] => {
+  if (!state.storyCards || state.storyCards.length === 0) return [];
 
   const recentHistoryText = state.history
     .slice(-3)
@@ -113,12 +158,82 @@ const getActiveStoryCards = (state: GameState, input: PlayerInput): string => {
     }),
   );
 
-  if (matchedCards.length === 0) return '';
+  if (matchedCards.length === 0) return [];
 
-  return matchedCards.map((card) => `[World Info - ${card.title}]: ${card.entry}`).join('\n');
+  return matchedCards.map((card) => ({ title: card.title, entry: card.entry }));
 };
 
-const buildContext = (state: GameState, input: PlayerInput): string => {
+const getStoryCardCacheKey = (state: GameState, cardId: string, entry: string): string => `${state.id}::${cardId}::${entry}`;
+
+const embedText = async (client: BedrockRuntimeClient, text: string): Promise<number[] | null> => {
+  if (!EMBEDDING_MODEL || !text.trim()) {
+    return null;
+  }
+
+  try {
+    const response = await client.send(
+      new InvokeModelCommand({
+        modelId: EMBEDDING_MODEL,
+        contentType: 'application/json',
+        accept: 'application/json',
+        body: JSON.stringify({ inputText: text }),
+      }),
+    );
+
+    const rawBody = new TextDecoder().decode(response.body);
+    const parsed = JSON.parse(rawBody) as { embedding?: unknown; embeddingsByType?: { float?: unknown } };
+
+    return parseEmbedding(parsed.embedding ?? parsed.embeddingsByType?.float);
+  } catch {
+    return null;
+  }
+};
+
+const getSemanticMatchedCards = async (client: BedrockRuntimeClient, state: GameState, input: PlayerInput): Promise<EmbeddedStoryCard[] | null> => {
+  if (!state.storyCards || state.storyCards.length === 0) {
+    return [];
+  }
+
+  const transcriptEmbedding = await embedText(client, input.content);
+  if (!transcriptEmbedding) {
+    return null;
+  }
+
+  const scoredCards: EmbeddedStoryCard[] = [];
+
+  for (const card of state.storyCards) {
+    const key = getStoryCardCacheKey(state, card.id, card.entry);
+    const cached = storyCardEmbeddingStore.get(key);
+    let cardEmbedding = cached;
+
+    if (!cardEmbedding) {
+      const cardContext = [card.title, card.entry, card.keys.join(' ')].filter(Boolean).join('\n');
+      cardEmbedding = await embedText(client, cardContext) ?? undefined;
+      if (cardEmbedding) {
+        storyCardEmbeddingStore.set(key, cardEmbedding);
+      }
+    }
+
+    if (!cardEmbedding || cardEmbedding.length !== transcriptEmbedding.length) {
+      continue;
+    }
+
+    const similarity = cosineSimilarity(transcriptEmbedding, cardEmbedding);
+    if (similarity >= STORY_CARD_SIMILARITY_THRESHOLD) {
+      scoredCards.push({ title: card.title, entry: card.entry, similarity });
+    }
+  }
+
+  return scoredCards.sort((a, b) => (b.similarity ?? 0) - (a.similarity ?? 0)).slice(0, Math.max(1, STORY_CARD_TOP_K));
+};
+
+const formatActiveStoryCards = (cards: EmbeddedStoryCard[]): string => {
+  if (cards.length === 0) return '';
+
+  return cards.map((card) => `[World Info - ${card.title}]: ${card.entry}`).join('\n');
+};
+
+const buildContext = (state: GameState, input: PlayerInput, activeCards: string): string => {
   const characterContext = state.characters
     .map(
       (c) =>
@@ -131,7 +246,6 @@ const buildContext = (state: GameState, input: PlayerInput): string => {
     .map((h) => `[${h.type}] ${h.description}`)
     .join('\n');
 
-  const activeCards = getActiveStoryCards(state, input);
   const location = state.world.locations[state.world.currentLocationId];
 
   return [
@@ -403,7 +517,13 @@ export default async function handler(req: any, res: any) {
   const start = Date.now();
 
   try {
-    const context = buildContext(state as GameState, input as PlayerInput);
+    const gameState = state as GameState;
+    const playerInput = input as PlayerInput;
+
+    const semanticCards = await getSemanticMatchedCards(client, gameState, playerInput);
+    const usedKeywordFallback = semanticCards === null;
+    const activeCards = semanticCards ?? getKeywordMatchedCards(gameState, playerInput);
+    const context = buildContext(gameState, playerInput, formatActiveStoryCards(activeCards));
     const stageLatenciesMs: Record<string, number> = {};
 
     const agent1Start = Date.now();
@@ -414,6 +534,9 @@ export default async function handler(req: any, res: any) {
 
     const traceMetadata: TraceMetadata = {
       ...(parsedAgent1.warning ? { warnings: [parsedAgent1.warning] } : {}),
+      ...(usedKeywordFallback
+        ? { warnings: [...(parsedAgent1.warning ? [parsedAgent1.warning] : []), 'Story-card embeddings unavailable; used keyword matcher fallback.'] }
+        : {}),
     };
 
     let agent2: Agent2Response;
