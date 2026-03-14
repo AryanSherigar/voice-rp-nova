@@ -1,7 +1,19 @@
 import { GameState, PlayerInput, TurnResponse } from '../types';
+import { TURN_TIMEOUT_MS } from './config';
 
 const PRIMARY_TURN_ENDPOINT = '/api/turn';
 const FALLBACK_TURN_ENDPOINT = '/api/aws-turn';
+
+export class TurnTimeoutError extends Error {
+  constructor(message = `Turn request timed out after ${TURN_TIMEOUT_MS}ms.`, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'TurnTimeoutError';
+  }
+}
+
+const isAbortError = (error: unknown): error is DOMException => {
+  return error instanceof DOMException && error.name === 'AbortError';
+};
 
 const isRecord = (value: unknown): value is Record<string, unknown> => {
   return typeof value === 'object' && value !== null;
@@ -47,11 +59,12 @@ export const isTurnResponse = (value: unknown): value is TurnResponse => {
   return true;
 };
 
-const postTurn = async (endpoint: string, state: GameState, input: PlayerInput): Promise<TurnResponse> => {
+const postTurn = async (endpoint: string, state: GameState, input: PlayerInput, signal?: AbortSignal): Promise<TurnResponse> => {
   const response = await fetch(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ state, input })
+    body: JSON.stringify({ state, input }),
+    signal
   });
 
   if (!response.ok) {
@@ -67,10 +80,29 @@ const postTurn = async (endpoint: string, state: GameState, input: PlayerInput):
 };
 
 export const executeTurn = async (state: GameState, input: PlayerInput): Promise<TurnResponse> => {
+  const abortController = new AbortController();
+  const timeoutId = setTimeout(() => {
+    abortController.abort();
+  }, TURN_TIMEOUT_MS);
+
   try {
-    return await postTurn(PRIMARY_TURN_ENDPOINT, state, input);
+    return await postTurn(PRIMARY_TURN_ENDPOINT, state, input, abortController.signal);
   } catch (error) {
+    if (isAbortError(error) || abortController.signal.aborted) {
+      throw new TurnTimeoutError(undefined, { cause: error });
+    }
+
     console.warn('Primary turn route failed; falling back to secondary turn route.', error);
-    return postTurn(FALLBACK_TURN_ENDPOINT, state, input);
+    try {
+      return await postTurn(FALLBACK_TURN_ENDPOINT, state, input, abortController.signal);
+    } catch (fallbackError) {
+      if (isAbortError(fallbackError) || abortController.signal.aborted) {
+        throw new TurnTimeoutError(undefined, { cause: fallbackError });
+      }
+
+      throw fallbackError;
+    }
+  } finally {
+    clearTimeout(timeoutId);
   }
 };
