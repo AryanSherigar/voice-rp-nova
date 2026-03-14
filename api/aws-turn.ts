@@ -322,7 +322,13 @@ const buildSafeAgent2Fallback = (state: GameState, transcript: string): Agent2Re
   },
 });
 
-const assembleTurnResponse = (agent1: Agent1Response, agent2: Agent2Response, latencyMs: number, traceMetadata?: TraceMetadata): TurnResponse => ({
+const assembleTurnResponse = (
+  agent1: Agent1Response,
+  agent2: Agent2Response,
+  latencyMs: number,
+  stageLatenciesMs: Record<string, number>,
+  traceMetadata?: TraceMetadata
+): TurnResponse => ({
   transcript: agent1.transcript,
   ...(agent1.audio ? { audio: agent1.audio } : {}),
   director: agent2.director,
@@ -331,6 +337,7 @@ const assembleTurnResponse = (agent1: Agent1Response, agent2: Agent2Response, la
     agentNames: ['Nova 2 Sonic', 'Nova 2 Lite', 'Assembler'],
     pipeline: ['agent1:narration', 'agent2:director_world', 'assembler:turn_response'],
     latencyMs,
+    stageLatenciesMs,
     ...(traceMetadata ? { metadata: traceMetadata } : {}),
   },
 });
@@ -397,8 +404,11 @@ export default async function handler(req: any, res: any) {
 
   try {
     const context = buildContext(state as GameState, input as PlayerInput);
+    const stageLatenciesMs: Record<string, number> = {};
 
+    const agent1Start = Date.now();
     const agent1Raw = await callAgent(client, NARRATOR_MODEL, buildAgent1Prompt(context));
+    stageLatenciesMs['agent1:narration'] = Date.now() - agent1Start;
     const parsedAgent1 = parseAgent1Response(agent1Raw);
     const agent1 = parsedAgent1.response;
 
@@ -408,16 +418,20 @@ export default async function handler(req: any, res: any) {
 
     let agent2: Agent2Response;
     try {
+      const agent2Start = Date.now();
       const agent2Raw = await callAgent(client, DIRECTOR_MODEL, buildAgent2Prompt(context, agent1.transcript));
+      stageLatenciesMs['agent2:director_world'] = Date.now() - agent2Start;
       agent2 = validateAgent2(parseModelJson<Agent2Response>(agent2Raw), agent1.transcript);
     } catch (error) {
       const fallbackReason = `Director response invalid JSON/shape; applied safe fallback state. (${error instanceof Error ? error.message : 'Unknown error'})`;
       traceMetadata.fallbackReason = fallbackReason;
       traceMetadata.warnings = [...(traceMetadata.warnings ?? []), fallbackReason];
       agent2 = buildSafeAgent2Fallback(state as GameState, agent1.transcript);
+      stageLatenciesMs['agent2:director_world'] = stageLatenciesMs['agent2:director_world'] ?? 0;
     }
 
-    const response = assembleTurnResponse(agent1, agent2, Date.now() - start, Object.keys(traceMetadata).length > 0 ? traceMetadata : undefined);
+    stageLatenciesMs['assembler:turn_response'] = Math.max(0, Date.now() - start - (stageLatenciesMs['agent1:narration'] ?? 0) - (stageLatenciesMs['agent2:director_world'] ?? 0));
+    const response = assembleTurnResponse(agent1, agent2, Date.now() - start, stageLatenciesMs, Object.keys(traceMetadata).length > 0 ? traceMetadata : undefined);
 
     if (!response.transcript || !response.world.narrative || !response.director.pacing) {
       throw new Error('Defensive response validation failed');

@@ -24,7 +24,8 @@ import {
   StoryCard,
   CharacterState,
   Location,
-  DirectorDecision
+  DirectorDecision,
+  TurnTrace
 } from './types';
 import { executeTurn } from './services/turnService';
 
@@ -202,6 +203,7 @@ export default function App() {
   const [view, setView] = useState<ViewMode>(ViewMode.LANDING);
   const [gameState, dispatch] = useReducer(gameReducer, null);
   const [isDirectorMode, setIsDirectorMode] = useState(false);
+  const [lastTurnTrace, setLastTurnTrace] = useState<TurnTrace | null>(null);
 
   // Persistence Effect: Auto-save when game state changes (and isn't processing)
   useEffect(() => {
@@ -269,6 +271,7 @@ export default function App() {
     };
     dispatch({ type: 'ADD_LOG', payload: inputEntry });
     dispatch({ type: 'START_TURN' });
+    setLastTurnTrace(null);
 
     const appendSystemLog = (description: string) => {
       dispatch({
@@ -284,6 +287,19 @@ export default function App() {
     };
 
     const finalizeWithFallback = (description: string) => {
+      const fallbackTrace: TurnTrace = {
+        agentNames: ['Nova 2 Sonic', 'Nova 2 Lite'],
+        latencyMs: 0,
+        stageLatenciesMs: {
+          'agent1:narration': 0,
+          'agent2:director_world': 0,
+          'assembler:turn_response': 0
+        },
+        metadata: {
+          fallbackReason: description
+        }
+      };
+      setLastTurnTrace(fallbackTrace);
       dispatch({
         type: 'STREAM_UPDATE',
         payload: {
@@ -305,6 +321,7 @@ export default function App() {
         return;
       }
 
+      setLastTurnTrace(turnResponse.trace ?? null);
       dispatch({
         type: 'STREAM_UPDATE',
         payload: {
@@ -395,6 +412,25 @@ export default function App() {
       </div>
     );
 
+    const stageEntries = Object.entries(lastTurnTrace?.stageLatenciesMs ?? {});
+    const TracePanel = (
+      <div className="bg-navy-900/90 border border-navy-700 rounded px-2 py-1 text-[10px] leading-tight min-w-[220px]">
+        <div className="flex items-center gap-2">
+          <span className="text-emerald-400">● Agent 1 running (Nova Sonic)</span>
+          <span className="text-cyan-400">● Agent 2 running (Nova Lite)</span>
+        </div>
+        <div className="text-slate-400 mt-1">Latency:</div>
+        <div className="flex flex-wrap gap-x-2 gap-y-0.5 text-slate-300">
+          {stageEntries.length > 0 ? stageEntries.map(([stage, latency]) => (
+            <span key={stage}>{stage}: {Math.round(latency)}ms</span>
+          )) : <span className="text-slate-500">awaiting trace…</span>}
+        </div>
+        <div className="mt-1 text-slate-300">
+          Fallback: <span className={lastTurnTrace?.metadata?.fallbackReason ? 'text-amber-400' : 'text-emerald-400'}>{lastTurnTrace?.metadata?.fallbackReason ? 'active' : 'none'}</span>
+        </div>
+      </div>
+    );
+
     // 3. Director Overlay Content
     const DirectorContent = (
       <DirectorOverlay
@@ -413,6 +449,7 @@ export default function App() {
         showExit
         isDirectorMode={isDirectorMode}
         onToggleDirector={() => setIsDirectorMode(!isDirectorMode)}
+        tracePanel={TracePanel}
       >
         {/* Center: Story & Input */}
         <div className="flex flex-col h-full">
