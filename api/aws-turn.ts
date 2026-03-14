@@ -1,8 +1,9 @@
-import { GoogleGenAI } from '@google/genai';
+import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
 import type { GameState, PlayerInput, TurnResponse, DirectorAgentResponse, WorldUpdateResponse } from '../types';
 
-const NARRATOR_MODEL = 'gemini-2.5-flash'; // Agent 1 (Nova 2 Sonic equivalent)
-const DIRECTOR_MODEL = 'gemini-2.5-flash-lite'; // Agent 2 (Nova 2 Lite equivalent)
+const NARRATOR_MODEL = process.env.BEDROCK_NARRATOR_MODEL_ID;
+const DIRECTOR_MODEL = process.env.BEDROCK_DIRECTOR_MODEL_ID;
+const BEDROCK_REGION = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION;
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_REQUESTS = 20;
 
@@ -292,17 +293,28 @@ const assembleTurnResponse = (agent1: Agent1Response, agent2: Agent2Response, la
   },
 });
 
-const callAgent = async (ai: GoogleGenAI, model: string, prompt: string): Promise<string> => {
-  const response = await ai.models.generateContent({
-    model,
-    contents: prompt,
-    config: {
-      responseMimeType: 'application/json',
+const callAgent = async (client: BedrockRuntimeClient, modelId: string, prompt: string): Promise<string> => {
+  const payload = {
+    messages: [{ role: 'user', content: [{ text: prompt }] }],
+    inferenceConfig: {
       temperature: 0.4,
     },
-  });
+  };
 
-  return response.text || '';
+  const response = await client.send(
+    new InvokeModelCommand({
+      modelId,
+      contentType: 'application/json',
+      accept: 'application/json',
+      body: JSON.stringify(payload),
+    }),
+  );
+
+  const rawBody = new TextDecoder().decode(response.body);
+  const parsed = JSON.parse(rawBody) as { output?: { message?: { content?: Array<{ text?: string }> } } };
+  const text = parsed.output?.message?.content?.find((part) => typeof part.text === 'string')?.text?.trim();
+
+  return text || '';
 };
 
 export default async function handler(req: any, res: any) {
@@ -322,9 +334,13 @@ export default async function handler(req: any, res: any) {
     return;
   }
 
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    res.status(500).json({ error: 'Server misconfiguration: GEMINI_API_KEY is missing.' });
+  if (!BEDROCK_REGION) {
+    res.status(500).json({ error: 'Server misconfiguration: AWS_REGION (or AWS_DEFAULT_REGION) is missing.' });
+    return;
+  }
+
+  if (!NARRATOR_MODEL || !DIRECTOR_MODEL) {
+    res.status(500).json({ error: 'Server misconfiguration: BEDROCK_NARRATOR_MODEL_ID or BEDROCK_DIRECTOR_MODEL_ID is missing.' });
     return;
   }
 
@@ -334,16 +350,16 @@ export default async function handler(req: any, res: any) {
     return;
   }
 
-  const ai = new GoogleGenAI({ apiKey });
+  const client = new BedrockRuntimeClient({ region: BEDROCK_REGION });
   const start = Date.now();
 
   try {
     const context = buildContext(state as GameState, input as PlayerInput);
 
-    const agent1Raw = await callAgent(ai, NARRATOR_MODEL, buildAgent1Prompt(context));
+    const agent1Raw = await callAgent(client, NARRATOR_MODEL, buildAgent1Prompt(context));
     const agent1 = validateAgent1(parseModelJson<Agent1Response>(agent1Raw));
 
-    const agent2Raw = await callAgent(ai, DIRECTOR_MODEL, buildAgent2Prompt(context, agent1.transcript));
+    const agent2Raw = await callAgent(client, DIRECTOR_MODEL, buildAgent2Prompt(context, agent1.transcript));
     const agent2 = validateAgent2(parseModelJson<Agent2Response>(agent2Raw), agent1.transcript);
 
     const response = assembleTurnResponse(agent1, agent2, Date.now() - start);
