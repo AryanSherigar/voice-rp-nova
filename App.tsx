@@ -27,11 +27,11 @@ import {
   DirectorDecision,
   TurnTrace
 } from './types';
-import { executeTurn } from './services/turnService';
+import { TurnTimeoutError, executeTurn } from './services/turnService';
+import { TURN_TIMEOUT_MS } from './services/config';
 
 const SYSTEM_STABILIZED_MESSAGE = '[SYSTEM: Cognitive divergence detected. World state stabilized.]';
 const SYSTEM_MISSING_TERMINAL_MESSAGE = '[SYSTEM: Turn finalized with fallback (missing terminal chunk).]';
-const TURN_TIMEOUT_MS = 30000;
 
 // --- State Management ---
 
@@ -313,13 +313,7 @@ export default function App() {
     };
 
     try {
-      const turnTimeoutAt = Date.now() + TURN_TIMEOUT_MS;
       const turnResponse = await executeTurn(gameState, input);
-
-      if (Date.now() > turnTimeoutAt) {
-        finalizeWithFallback('[SYSTEM: Stream timeout detected. World state stabilized.]');
-        return;
-      }
 
       setLastTurnTrace(turnResponse.trace ?? null);
       dispatch({
@@ -333,6 +327,11 @@ export default function App() {
       dispatch({ type: 'END_TURN', payload: { director: turnResponse.director, world: turnResponse.world } });
     } catch (error) {
       console.error("Turn failed", error);
+      if (error instanceof TurnTimeoutError) {
+        finalizeWithFallback(`[SYSTEM: Stream timeout detected after ${TURN_TIMEOUT_MS}ms. World state stabilized.]`);
+        return;
+      }
+
       finalizeWithFallback(`${SYSTEM_STABILIZED_MESSAGE} (${SYSTEM_MISSING_TERMINAL_MESSAGE})`);
     }
   }, [gameState]);
