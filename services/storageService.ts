@@ -66,13 +66,19 @@ export const deleteGame = (id: string): void => {
 export const getSavedGames = (): SaveMetadata[] => {
   const saves = loadAllSavesRaw();
   return Object.values(saves)
-    .map(state => ({
-      id: state.id,
-      title: state.title,
-      lastPlayed: state.lastPlayed || Date.now(),
-      tick: state.tick,
-      previewText: state.history[state.history.length - 1]?.description?.substring(0, 100) + "..." || "No history."
-    }))
+    .map(state => {
+      const lastDescription = state.history[state.history.length - 1]?.description;
+
+      return {
+        id: state.id,
+        title: state.title,
+        lastPlayed: state.lastPlayed || Date.now(),
+        tick: state.tick,
+        previewText: lastDescription
+          ? lastDescription.substring(0, 100) + "..."
+          : "No history."
+      };
+    })
     .sort((a, b) => b.lastPlayed - a.lastPlayed); // Sort by most recent
 };
 
