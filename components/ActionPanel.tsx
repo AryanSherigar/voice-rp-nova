@@ -14,13 +14,13 @@ export const ActionPanel: React.FC<Props> = ({ onInput, isProcessing }) => {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!content.trim()) return;
-    onInput({ type: activeTab, content });
+    onInput({ type: activeTab, content, isVoice: false });
     setContent('');
   };
 
   const handleContinue = () => {
     // Send a passive action to trigger the next turn
-    onInput({ type: InputType.STORY, content: "(The player observes and waits...)" });
+    onInput({ type: InputType.STORY, content: "(The player observes and waits...)", isVoice: false });
     setContent('');
   };
 

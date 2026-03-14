@@ -33,6 +33,9 @@ export const StoryLog: React.FC<{ history: EventLogEntry[] }> = ({ history }) =>
                  <div className="bg-navy-800 border border-navy-700 text-slate-200 px-4 py-2 rounded-lg rounded-tr-none text-sm shadow-sm">
                     {entry.description}
                  </div>
+                 {entry.audioBase64 && (
+                   <span className="mt-1 text-[10px] text-teal-500 uppercase tracking-wide">Voice input attached</span>
+                 )}
               </div>
             )}
             
@@ -42,6 +45,9 @@ export const StoryLog: React.FC<{ history: EventLogEntry[] }> = ({ history }) =>
                  <div className="prose prose-invert prose-p:text-slate-300 prose-p:leading-relaxed prose-p:text-[0.95rem] max-w-none">
                     {entry.description}
                  </div>
+                 {entry.audioBase64 && (
+                   <span className="text-[10px] text-teal-500/80 uppercase tracking-wide">Narration audio available</span>
+                 )}
               </div>
             )}
 
