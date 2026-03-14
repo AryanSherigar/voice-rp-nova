@@ -1,11 +1,14 @@
 import { GameState, CreateStoryFormData, CharacterState, StoryCard } from "../types";
+import { generateId } from "./id";
 
 export const createGameStateFromForm = (data: CreateStoryFormData): GameState => {
   const locationId = "loc_start";
-  
+
+  const characterIds = data.characters.map(() => generateId('char'));
+
   // Transform form characters to CharacterState
   const characters: CharacterState[] = data.characters.map((c, index) => ({
-    id: `char_${index}_${c.name.toLowerCase().replace(/\s+/g, '_')}`,
+    id: characterIds[index],
     name: c.name,
     role: c.role,
     description: c.description,
@@ -28,7 +31,7 @@ export const createGameStateFromForm = (data: CreateStoryFormData): GameState =>
             keys: [c.name.toLowerCase()], // Trigger on character name
             entry: c.lore,
             isActive: false,
-            characterId: `char_${index}_${c.name.toLowerCase().replace(/\s+/g, '_')}` // Link to character ID
+            characterId: characterIds[index] // Link to character ID
         };
     })
     .filter((c): c is StoryCard => c !== null);

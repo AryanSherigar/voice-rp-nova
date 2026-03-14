@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { CharacterState } from '../types';
 import { Button } from './Button';
 import { CharacterCard } from './CharacterCard';
+import { generateId } from '../utils/id';
 
 interface Props {
   characters: CharacterState[];
@@ -35,7 +36,7 @@ export const CharacterManager: React.FC<Props> = ({ characters, onAdd, onUpdate,
 
     if (isEditing === 'new') {
       const newChar: CharacterState = {
-        id: `char_${Date.now()}`,
+        id: generateId('char'),
         name: editForm.name,
         role: editForm.role,
         description: editForm.description || '',

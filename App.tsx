@@ -11,6 +11,7 @@ import { LocationManager } from './components/LocationManager';
 import { DirectorOverlay } from './components/DirectorOverlay'; // Import DirectorOverlay
 import { createGameStateFromForm } from './utils/gameFactory';
 import { saveGame } from './services/storageService';
+import { generateId } from './utils/id';
 import {
   GameState,
   PlayerInput,
@@ -76,7 +77,7 @@ function gameReducer(state: GameState | null, action: Action): GameState | null 
 
     case 'STREAM_UPDATE': {
       const narratorEntry: EventLogEntry = {
-        id: `evt_${Date.now()}`,
+        id: generateId('evt'),
         tick: state.tick + 1,
         type: 'NARRATOR',
         description: action.payload.description,
@@ -110,7 +111,7 @@ function gameReducer(state: GameState | null, action: Action): GameState | null 
       });
 
       const directorEntry: EventLogEntry = {
-        id: `dir_${Date.now()}`,
+        id: generateId('dir'),
         tick: state.tick + 1,
         type: 'DIRECTOR',
         description: `Director: ${director.pacing} Pacing`,
@@ -234,7 +235,7 @@ export default function App() {
     // Generate a fresh unique ID for new scenario instances so they don't overwrite the template slots if we had them
     const freshState = {
       ...scenario.initialState,
-      id: `game_${Date.now()}`,
+      id: generateId('game'),
       lastPlayed: Date.now()
     };
     dispatch({ type: 'INIT_GAME', payload: freshState });
@@ -274,7 +275,7 @@ export default function App() {
     };
 
     const inputEntry: EventLogEntry = {
-      id: `in_${Date.now()}`,
+      id: generateId('in'),
       tick: gameState.tick,
       type: 'PLAYER',
       description: input.content,
@@ -290,7 +291,7 @@ export default function App() {
       dispatch({
         type: 'ADD_LOG',
         payload: {
-          id: `sys_${Date.now()}`,
+          id: generateId('sys'),
           tick: gameState.tick + 1,
           type: 'DIRECTOR',
           description,
