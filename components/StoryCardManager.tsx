@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { StoryCard, CharacterState, Location } from '../types';
 import { Button } from './Button';
+import { generateId } from '../utils/id';
 
 interface Props {
   cards: StoryCard[];
@@ -30,7 +31,7 @@ export const StoryCardManager: React.FC<Props> = ({ cards, characters, locations
 
     if (isEditing === 'new') {
       const newCard: StoryCard = {
-        id: `card_${Date.now()}`,
+        id: generateId('card'),
         title: editForm.title || 'Untitled',
         keys: editForm.keys || [],
         entry: editForm.entry || '',

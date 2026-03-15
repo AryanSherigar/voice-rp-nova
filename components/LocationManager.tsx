@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Location } from '../types';
 import { Button } from './Button';
+import { generateId } from '../utils/id';
 
 interface Props {
   locations: Location[];
@@ -35,7 +36,7 @@ export const LocationManager: React.FC<Props> = ({ locations, currentLocationId,
 
     if (isEditing === 'new') {
       const newLoc: Location = {
-        id: `loc_${Date.now()}`,
+        id: generateId('loc'),
         name: editForm.name,
         description: editForm.description
       };

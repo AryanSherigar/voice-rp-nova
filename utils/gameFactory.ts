@@ -39,7 +39,7 @@ export const createGameStateFromForm = (data: CreateStoryFormData): GameState =>
   const initialNarrative = `You find yourself in ${data.settingName}. ${data.settingDescription} Nearby, ${characters.map(c => c.name).join(' and ')} are waiting.`;
 
   return {
-    id: `custom_${Date.now()}`,
+    id: generateId('custom'),
     title: data.title,
     tick: 0,
     lastPlayed: Date.now(),
