@@ -59,7 +59,7 @@ type Action =
   // Director Actions
   | { type: 'UPDATE_DIRECTOR_STATE'; payload: Partial<DirectorDecision> };
 
-function gameReducer(state: GameState | null, action: Action): GameState | null {
+export function gameReducer(state: GameState | null, action: Action): GameState | null {
   if (action.type === 'INIT_GAME') {
     return action.payload;
   }
