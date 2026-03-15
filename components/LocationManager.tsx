@@ -16,7 +16,7 @@ export const LocationManager: React.FC<Props> = ({ locations, currentLocationId,
   const [editForm, setEditForm] = useState<Partial<Location>>({});
 
   const handleDelete = (id: string) => {
-    if (window.confirm('Are you sure you want to delete this story?')) {
+    if (window.confirm('Are you sure you want to delete this location?')) {
       onDelete(id);
     }
   };

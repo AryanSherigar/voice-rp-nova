@@ -16,7 +16,7 @@ export const CharacterManager: React.FC<Props> = ({ characters, onAdd, onUpdate,
   const [editForm, setEditForm] = useState<Partial<CharacterState>>({});
 
   const handleDelete = (id: string) => {
-    if (window.confirm('Are you sure you want to delete this story?')) {
+    if (window.confirm('Are you sure you want to delete this character?')) {
       onDelete(id);
     }
   };
