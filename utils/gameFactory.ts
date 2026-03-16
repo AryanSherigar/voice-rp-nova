@@ -26,7 +26,7 @@ export const createGameStateFromForm = (data: CreateStoryFormData): GameState =>
     .map((c, index): StoryCard | null => {
         if (!c.lore) return null;
         return {
-            id: `card_lore_${index}`,
+            id: generateId('card_lore'),
             title: `${c.name}'s Secret`,
             keys: [c.name.toLowerCase()], // Trigger on character name
             entry: c.lore,
