@@ -492,12 +492,36 @@ export default function App() {
       </div>
     );
 
+    const hasTrace = Boolean(lastTurnTrace);
     const stageEntries = Object.entries(lastTurnTrace?.stageLatenciesMs ?? {});
+    const hasStageLatencies = stageEntries.length > 0;
+    const hasFallback = Boolean(lastTurnTrace?.metadata?.fallbackReason);
+    const traceStatus = gameState.isProcessing
+      ? 'running'
+      : hasFallback
+        ? 'fallback'
+        : hasTrace
+          ? 'completed'
+          : 'idle';
+
+    const traceStatusTone =
+      traceStatus === 'running'
+        ? 'text-cyan-400'
+        : traceStatus === 'completed'
+          ? 'text-emerald-400'
+          : traceStatus === 'fallback'
+            ? 'text-amber-400'
+            : 'text-slate-500';
     const TracePanel = (
       <div className="bg-navy-900/90 border border-navy-700 rounded px-2 py-1 text-[10px] leading-tight min-w-[220px]">
-        <div className="flex items-center gap-2">
-          <span className="text-emerald-400">● Agent 1 running (Nova Sonic)</span>
-          <span className="text-cyan-400">● Agent 2 running (Nova Lite)</span>
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className={traceStatusTone}>● Status: {traceStatus}</span>
+          {hasTrace && !hasFallback && !gameState.isProcessing && (
+            <span className="text-emerald-400">● Agents completed</span>
+          )}
+          {hasFallback && (
+            <span className="text-amber-400">● Fallback engaged</span>
+          )}
         </div>
         <div className="text-slate-400 mt-1">Latency:</div>
         <div className="flex flex-wrap gap-x-2 gap-y-0.5 text-slate-300">
@@ -505,6 +529,18 @@ export default function App() {
             <span key={stage}>{stage}: {Math.round(latency)}ms</span>
           )) : <span className="text-slate-500">awaiting trace…</span>}
         </div>
+        {hasStageLatencies && (
+          <div className="mt-1 flex flex-wrap gap-1">
+            {stageEntries.map(([stage]) => (
+              <span
+                key={`${stage}-badge`}
+                className={`rounded border px-1 py-0.5 ${gameState.isProcessing ? 'border-cyan-500/40 text-cyan-300' : 'border-emerald-500/40 text-emerald-300'}`}
+              >
+                {stage}: {gameState.isProcessing ? 'running' : 'done'}
+              </span>
+            ))}
+          </div>
+        )}
         <div className="mt-1 text-slate-300">
           Fallback: <span className={lastTurnTrace?.metadata?.fallbackReason ? 'text-amber-400' : 'text-emerald-400'}>{lastTurnTrace?.metadata?.fallbackReason ? 'active' : 'none'}</span>
         </div>
