@@ -1083,13 +1083,13 @@ export default async function handler(req: any, res: any) {
   }
 
   const validatedState = validateState(state);
-  if (!validatedState.ok) {
+  if (validatedState.ok === false) {
     res.status(400).json({ error: validatedState.error });
     return;
   }
 
   const validatedInput = validateInput(input);
-  if (!validatedInput.ok) {
+  if (validatedInput.ok === false) {
     res.status(400).json({ error: validatedInput.error });
     return;
   }
