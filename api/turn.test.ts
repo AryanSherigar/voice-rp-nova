@@ -76,6 +76,30 @@ describe('getClientIp', () => {
   });
 });
 
+
+describe('api/turn parser config', () => {
+  const envBackup = { ...process.env };
+
+  afterEach(() => {
+    process.env = { ...envBackup };
+    vi.resetModules();
+  });
+
+  it('configures framework-level body parser size limit for /api/turn', async () => {
+    process.env.TURN_MAX_BODY_SIZE_LIMIT = '2mb';
+
+    const { config } = await import('./turn');
+
+    expect(config).toEqual({
+      api: {
+        bodyParser: {
+          sizeLimit: '2mb',
+        },
+      },
+    });
+  });
+});
+
 describe('api/turn request validation', () => {
   const envBackup = { ...process.env };
 
