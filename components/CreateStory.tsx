@@ -13,8 +13,8 @@ export const CreateStory: React.FC<Props> = ({ onSubmit, onCancel }) => {
     settingName: '',
     settingDescription: '',
     characters: [
-      { name: '', role: '', description: '', lore: '' },
-      { name: '', role: '', description: '', lore: '' }
+      { name: '', role: '', description: '', goal: '', lore: '' },
+      { name: '', role: '', description: '', goal: '', lore: '' }
     ]
   });
 
@@ -99,12 +99,18 @@ export const CreateStory: React.FC<Props> = ({ onSubmit, onCancel }) => {
                       onChange={e => handleCharChange(i, 'role', e.target.value)}
                     />
                   </div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <input 
                         className="w-full bg-[#0F1218] border border-white/10 rounded-lg p-2.5 text-sm text-slate-200 focus:border-orange-500 focus:outline-none"
                         placeholder="Brief description / Personality"
                         value={char.description}
                         onChange={e => handleCharChange(i, 'description', e.target.value)}
+                    />
+                    <input 
+                        className="w-full bg-[#0F1218] border border-white/10 rounded-lg p-2.5 text-sm text-slate-200 focus:border-orange-500 focus:outline-none"
+                        placeholder="Current goal"
+                        value={char.goal || ''}
+                        onChange={e => handleCharChange(i, 'goal', e.target.value)}
                     />
                     <input 
                         className="w-full bg-[#0F1218] border border-white/10 rounded-lg p-2.5 text-sm text-slate-200 focus:border-teal-500 focus:outline-none placeholder-slate-600"

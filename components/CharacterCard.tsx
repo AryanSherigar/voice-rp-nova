@@ -3,6 +3,7 @@ import { CharacterState } from '../types';
 
 export const CharacterCard: React.FC<{ char: CharacterState }> = ({ char }) => {
   const isDead = char.status.toLowerCase() === 'dead' || char.status.toLowerCase() === 'deceased';
+  const contextualGoal = char.goal?.trim() || `${char.name} is focused on navigating the current situation.`;
 
   return (
     <div className={`bg-navy-900 border ${isDead ? 'border-red-900/50 opacity-80' : 'border-navy-800'} rounded p-4 mb-3 hover:border-navy-700 transition-colors relative overflow-hidden`}>
@@ -30,7 +31,7 @@ export const CharacterCard: React.FC<{ char: CharacterState }> = ({ char }) => {
 
       <div className="mt-3 pt-3 border-t border-navy-800">
          <div className="text-[10px] text-slate-600 uppercase font-bold mb-1">Current Goal</div>
-         <p className="text-xs text-slate-400 italic">"Survive the current encounter."</p>
+         <p className="text-xs text-slate-400 italic">{contextualGoal}</p>
       </div>
     </div>
   );

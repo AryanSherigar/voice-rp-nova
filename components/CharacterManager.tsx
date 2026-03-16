@@ -31,6 +31,7 @@ export const CharacterManager: React.FC<Props> = ({ characters, onAdd, onUpdate,
         name: '',
         role: '',
         description: '',
+        goal: '',
         status: 'Normal',
         emotions: { trust: 50, fear: 10, anger: 0, hope: 50 }
       });
@@ -46,6 +47,7 @@ export const CharacterManager: React.FC<Props> = ({ characters, onAdd, onUpdate,
         name: editForm.name,
         role: editForm.role,
         description: editForm.description || '',
+        goal: editForm.goal || '',
         status: editForm.status || 'Normal',
         emotions: editForm.emotions || { trust: 50, fear: 10, anger: 0, hope: 50 }
       };
@@ -115,6 +117,12 @@ export const CharacterManager: React.FC<Props> = ({ characters, onAdd, onUpdate,
                   placeholder="Description"
                   value={editForm.description}
                   onChange={e => setEditForm({...editForm, description: e.target.value})}
+              />
+              <input 
+                  className="w-full bg-navy-950 border border-navy-800 rounded p-2 text-xs text-slate-200 focus:border-teal-500 outline-none"
+                  placeholder="Current goal"
+                  value={editForm.goal || ''}
+                  onChange={e => setEditForm({...editForm, goal: e.target.value})}
               />
               
               {/* Emotions */}

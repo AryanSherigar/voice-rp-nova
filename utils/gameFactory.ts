@@ -12,6 +12,7 @@ export const createGameStateFromForm = (data: CreateStoryFormData): GameState =>
     name: c.name,
     role: c.role,
     description: c.description,
+    goal: c.goal?.trim() || `${c.name || 'This character'} wants to shape what happens in ${data.settingName}.`,
     status: "Normal",
     emotions: {
       trust: 50,
