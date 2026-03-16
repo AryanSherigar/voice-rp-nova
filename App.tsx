@@ -10,7 +10,7 @@ import { CharacterManager } from './components/CharacterManager';
 import { LocationManager } from './components/LocationManager';
 import { DirectorOverlay } from './components/DirectorOverlay'; // Import DirectorOverlay
 import { createGameStateFromForm } from './utils/gameFactory';
-import { saveGame } from './services/storageService';
+import { saveGame, StorageError } from './services/storageService';
 import { generateId } from './utils/id';
 import {
   GameState,
@@ -248,6 +248,12 @@ export default function App() {
   const [isDirectorMode, setIsDirectorMode] = useState(false);
   const [lastTurnTrace, setLastTurnTrace] = useState<TurnTrace | null>(null);
   const autosaveTimerRef = useRef<number | null>(null);
+  const [storageWarning, setStorageWarning] = useState<string | null>(null);
+
+  const handleStorageError = useCallback((error: StorageError) => {
+    console.error('Storage operation failed', error);
+    setStorageWarning(error.message);
+  }, []);
 
   // Persistence Effect: Debounced autosave on gameplay checkpoints only (completed turns).
   useEffect(() => {
@@ -260,7 +266,10 @@ export default function App() {
     }
 
     autosaveTimerRef.current = window.setTimeout(() => {
-      saveGame(gameState);
+      const saveResult = saveGame(gameState);
+      if (!saveResult.ok) {
+        handleStorageError(saveResult.error);
+      }
       autosaveTimerRef.current = null;
     }, AUTO_SAVE_DEBOUNCE_MS);
 
@@ -269,12 +278,18 @@ export default function App() {
         window.clearTimeout(autosaveTimerRef.current);
       }
     };
-  }, [gameState?.id, gameState?.tick, gameState?.isProcessing]);
+  }, [gameState?.id, gameState?.tick, gameState?.isProcessing, handleStorageError]);
 
   // --- Actions ---
 
-  const enterHub = () => setView(ViewMode.HUB);
-  const startCreation = () => setView(ViewMode.CREATE);
+  const enterHub = () => {
+    setStorageWarning(null);
+    setView(ViewMode.HUB);
+  };
+  const startCreation = () => {
+    setStorageWarning(null);
+    setView(ViewMode.CREATE);
+  };
 
   const startScenario = (scenario: ScenarioTemplate) => {
     // Generate a fresh unique ID for new scenario instances so they don't overwrite the template slots if we had them
@@ -284,22 +299,30 @@ export default function App() {
       lastPlayed: Date.now()
     };
     dispatch({ type: 'INIT_GAME', payload: freshState });
+    setStorageWarning(null);
     setView(ViewMode.PLAY);
   };
 
   const loadSavedGame = (state: GameState) => {
     dispatch({ type: 'INIT_GAME', payload: state });
+    setStorageWarning(null);
     setView(ViewMode.PLAY);
   };
 
   const submitCustomStory = (data: CreateStoryFormData) => {
     const newState = createGameStateFromForm(data);
     dispatch({ type: 'INIT_GAME', payload: newState });
+    setStorageWarning(null);
     setView(ViewMode.PLAY);
   };
 
   const exitGame = () => {
-    if (gameState) saveGame(gameState, { force: true }); // Ensure save on exit
+    if (gameState) {
+      const saveResult = saveGame(gameState, { force: true }); // Ensure save on exit
+      if (!saveResult.ok) {
+        handleStorageError(saveResult.error);
+      }
+    }
     dispatch({ type: 'RESET_GAME' });
     setView(ViewMode.HUB);
   };
@@ -392,10 +415,16 @@ export default function App() {
 
   if (view === ViewMode.HUB) return (
     <Layout>
+      {storageWarning && (
+        <div className="mx-4 mt-3 rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+          {storageWarning}
+        </div>
+      )}
       <Hub
         onSelectScenario={startScenario}
         onCreateNew={startCreation}
         onLoadGame={loadSavedGame}
+        onStorageWarning={setStorageWarning}
       />
     </Layout>
   );
@@ -502,6 +531,11 @@ export default function App() {
       >
         {/* Center: Story & Input */}
         <div className="flex flex-col h-full">
+          {storageWarning && (
+            <div className="mx-4 mt-3 rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+              {storageWarning}
+            </div>
+          )}
           <StoryLog history={gameState.history} />
           <ActionPanel onInput={handleInput} isProcessing={gameState.isProcessing} />
         </div>

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { getSavedGames, saveGame } from './storageService';
+import { deleteGame, getSavedGames, loadGame, saveGame } from './storageService';
 import { buildGameState } from '../tests/fixtures';
 
 const createStorage = () => {
@@ -32,10 +32,13 @@ describe('getSavedGames preview text', () => {
       })
     );
 
-    const saves = getSavedGames();
+    const savesResult = getSavedGames();
 
-    expect(saves).toHaveLength(1);
-    expect(saves[0].previewText).toBe('No history.');
+    expect(savesResult.ok).toBe(true);
+    if (!savesResult.ok) return;
+
+    expect(savesResult.data).toHaveLength(1);
+    expect(savesResult.data[0].previewText).toBe('No history.');
   });
 });
 
@@ -53,17 +56,79 @@ describe('saveGame snapshot behavior', () => {
     nowSpy.mockReturnValue(1000);
 
     const state = buildGameState();
-    saveGame(state);
+    const firstSave = saveGame(state);
+    expect(firstSave).toEqual({ ok: true, data: { skipped: false } });
     expect(localStorageMock.setItem).toHaveBeenCalledTimes(1);
 
     nowSpy.mockReturnValue(2000);
-    saveGame(state);
+    const secondSave = saveGame(state);
+    expect(secondSave).toEqual({ ok: true, data: { skipped: true } });
     expect(localStorageMock.setItem).toHaveBeenCalledTimes(1);
 
     nowSpy.mockReturnValue(3000);
-    saveGame(state, { force: true });
+    const forcedSave = saveGame(state, { force: true });
+    expect(forcedSave).toEqual({ ok: true, data: { skipped: false } });
     expect(localStorageMock.setItem).toHaveBeenCalledTimes(2);
 
     nowSpy.mockRestore();
+  });
+});
+
+
+describe('storage errors', () => {
+  beforeEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('returns structured load/list/delete errors when localStorage read fails', () => {
+    const localStorageMock = {
+      getItem: vi.fn(() => {
+        throw new Error('read fail');
+      }),
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+      clear: vi.fn(),
+    };
+
+    vi.stubGlobal('localStorage', localStorageMock);
+
+    const loadResult = loadGame('missing-id');
+    expect(loadResult.ok).toBe(false);
+    if (loadResult.ok) return;
+    expect(loadResult.error.code).toBe('STORAGE_READ_FAILED');
+
+    const listResult = getSavedGames();
+    expect(listResult.ok).toBe(false);
+    if (listResult.ok) return;
+    expect(listResult.error.code).toBe('STORAGE_READ_FAILED');
+
+    const deleteResult = deleteGame('save-id');
+    expect(deleteResult.ok).toBe(false);
+    if (deleteResult.ok) return;
+    expect(deleteResult.error.code).toBe('STORAGE_WRITE_FAILED');
+  });
+
+  it('returns structured save/delete errors when localStorage write fails', () => {
+    const localStorageMock = {
+      getItem: vi.fn(() => null),
+      setItem: vi.fn(() => {
+        throw new Error('write fail');
+      }),
+      removeItem: vi.fn(),
+      clear: vi.fn(),
+    };
+
+    vi.stubGlobal('localStorage', localStorageMock);
+
+    const state = buildGameState();
+    const saveResult = saveGame(state);
+    expect(saveResult.ok).toBe(false);
+    if (saveResult.ok) return;
+    expect(saveResult.error.code).toBe('STORAGE_WRITE_FAILED');
+
+    const deleteResult = deleteGame(state.id);
+    expect(deleteResult.ok).toBe(false);
+    if (deleteResult.ok) return;
+    expect(deleteResult.error.code).toBe('STORAGE_WRITE_FAILED');
   });
 });
