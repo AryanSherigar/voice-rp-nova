@@ -14,7 +14,6 @@ const STORY_CARD_SIMILARITY_THRESHOLD = Number.parseFloat(process.env.STORY_CARD
 const STORY_CARD_EMBEDDING_CACHE_TTL_MS = Number.parseInt(process.env.STORY_CARD_EMBEDDING_CACHE_TTL_MS ?? `${30 * 60_000}`, 10);
 const STORY_CARD_EMBEDDING_CACHE_MAX_ENTRIES = Number.parseInt(process.env.STORY_CARD_EMBEDDING_CACHE_MAX_ENTRIES ?? '500', 10);
 const STORY_CARD_EMBEDDING_CACHE_SWEEP_INTERVAL_MS = Number.parseInt(process.env.STORY_CARD_EMBEDDING_CACHE_SWEEP_INTERVAL_MS ?? `${10 * 60_000}`, 10);
-const MAX_REQUEST_BODY_SIZE_LIMIT = process.env.TURN_MAX_BODY_SIZE_LIMIT ?? '1.5mb';
 const MAX_INPUT_AUDIO_BASE64_BYTES = Number.parseInt(process.env.TURN_MAX_AUDIO_BASE64_BYTES ?? `${1_200_000}`, 10);
 const MAX_PROMPT_STRING_LENGTH = 1_000;
 const MAX_INPUT_CONTENT_LENGTH = 2_000;
@@ -81,7 +80,8 @@ const validateAudioMimeType = (value: unknown): value is string =>
 export const config = {
   api: {
     bodyParser: {
-      sizeLimit: MAX_REQUEST_BODY_SIZE_LIMIT,
+      // Vercel requires this value to be statically analyzable at build time.
+      sizeLimit: '1.5mb',
     },
   },
 };
@@ -897,10 +897,10 @@ const validateAgent1 = (candidate: unknown): Agent1Response => {
 
   const audio =
     value?.audio &&
-    typeof value.audio.mimeType === 'string' &&
-    typeof value.audio.payload === 'string' &&
-    value.audio.mimeType.trim() &&
-    value.audio.payload.trim()
+      typeof value.audio.mimeType === 'string' &&
+      typeof value.audio.payload === 'string' &&
+      value.audio.mimeType.trim() &&
+      value.audio.payload.trim()
       ? { mimeType: value.audio.mimeType.trim(), payload: value.audio.payload.trim() }
       : undefined;
 
@@ -922,17 +922,17 @@ const validateAgent2 = (candidate: unknown, transcript: string): Agent2Response 
 
   const characterUpdates = Array.isArray(worldSrc.characterUpdates)
     ? worldSrc.characterUpdates
-        .filter((u): u is NonNullable<WorldUpdateResponse['characterUpdates']>[number] => Boolean(u && typeof u.id === 'string' && u.id.trim()))
-        .map((u) => ({
-          id: u.id.trim(),
-          emotions: {
-            trust: asNumber(u.emotions?.trust, 50),
-            fear: asNumber(u.emotions?.fear, 50),
-            anger: asNumber(u.emotions?.anger, 50),
-            hope: asNumber(u.emotions?.hope, 50),
-          },
-          ...(typeof u.status === 'string' && u.status.trim() ? { status: u.status.trim() } : {}),
-        }))
+      .filter((u): u is NonNullable<WorldUpdateResponse['characterUpdates']>[number] => Boolean(u && typeof u.id === 'string' && u.id.trim()))
+      .map((u) => ({
+        id: u.id.trim(),
+        emotions: {
+          trust: asNumber(u.emotions?.trust, 50),
+          fear: asNumber(u.emotions?.fear, 50),
+          anger: asNumber(u.emotions?.anger, 50),
+          hope: asNumber(u.emotions?.hope, 50),
+        },
+        ...(typeof u.status === 'string' && u.status.trim() ? { status: u.status.trim() } : {}),
+      }))
     : [];
 
   const world: WorldUpdateResponse = {
@@ -941,12 +941,12 @@ const validateAgent2 = (candidate: unknown, transcript: string): Agent2Response 
     ...(Array.isArray(worldSrc.newFacts) ? { newFacts: asStringArray(worldSrc.newFacts, []) } : {}),
     ...(worldSrc.dnaShift
       ? {
-          dnaShift: {
-            orderChaos: asNumber(worldSrc.dnaShift.orderChaos, 50),
-            hopeDespair: asNumber(worldSrc.dnaShift.hopeDespair, 50),
-            trustBetrayal: asNumber(worldSrc.dnaShift.trustBetrayal, 50),
-          },
-        }
+        dnaShift: {
+          orderChaos: asNumber(worldSrc.dnaShift.orderChaos, 50),
+          hopeDespair: asNumber(worldSrc.dnaShift.hopeDespair, 50),
+          trustBetrayal: asNumber(worldSrc.dnaShift.trustBetrayal, 50),
+        },
+      }
       : {}),
   };
 
@@ -1083,13 +1083,13 @@ export default async function handler(req: any, res: any) {
   }
 
   const validatedState = validateState(state);
-  if (!validatedState.ok) {
+  if (validatedState.ok === false) {
     res.status(400).json({ error: validatedState.error });
     return;
   }
 
   const validatedInput = validateInput(input);
-  if (!validatedInput.ok) {
+  if (validatedInput.ok === false) {
     res.status(400).json({ error: validatedInput.error });
     return;
   }
