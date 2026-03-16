@@ -5,9 +5,11 @@ export const StoryLog: React.FC<{ history: EventLogEntry[] }> = ({ history }) =>
   const bottomRef = useRef<HTMLDivElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const lastAutoPlayedEntryIdRef = useRef<string | null>(null);
+  const playbackRequestTypeRef = useRef<'auto' | 'manual' | null>(null);
   const [activeAudio, setActiveAudio] = useState<{ entryId: string; src: string } | null>(null);
   const [shouldPlayAudio, setShouldPlayAudio] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [autoplayBlockedEntryId, setAutoplayBlockedEntryId] = useState<string | null>(null);
 
   const getNarratorAudio = (entry: EventLogEntry) => {
     if (entry.type !== 'NARRATOR') return null;
@@ -38,6 +40,7 @@ export const StoryLog: React.FC<{ history: EventLogEntry[] }> = ({ history }) =>
     if (lastAutoPlayedEntryIdRef.current === latestNarratorWithAudio.entryId) return;
 
     lastAutoPlayedEntryIdRef.current = latestNarratorWithAudio.entryId;
+    playbackRequestTypeRef.current = 'auto';
     setActiveAudio(latestNarratorWithAudio);
     setShouldPlayAudio(true);
   }, [latestNarratorWithAudio]);
@@ -47,11 +50,24 @@ export const StoryLog: React.FC<{ history: EventLogEntry[] }> = ({ history }) =>
 
     const audioElement = audioRef.current;
     if (!audioElement) return;
+    const playbackRequestType = playbackRequestTypeRef.current;
 
     audioElement.currentTime = 0;
     const playPromise = audioElement.play();
+    if (playPromise && typeof playPromise.then === 'function') {
+      playPromise.then(() => {
+        if (playbackRequestType === 'manual') {
+          setAutoplayBlockedEntryId(null);
+        }
+      });
+    }
+
     if (playPromise && typeof playPromise.catch === 'function') {
       playPromise.catch(() => {
+        if (playbackRequestType === 'auto') {
+          setAutoplayBlockedEntryId(activeAudio.entryId);
+        }
+
         setIsSpeaking(false);
       });
     }
@@ -63,6 +79,7 @@ export const StoryLog: React.FC<{ history: EventLogEntry[] }> = ({ history }) =>
     const narratorAudio = getNarratorAudio(entry);
     if (!narratorAudio) return;
 
+    playbackRequestTypeRef.current = 'manual';
     setActiveAudio(narratorAudio);
     setShouldPlayAudio(true);
   };
@@ -116,6 +133,11 @@ export const StoryLog: React.FC<{ history: EventLogEntry[] }> = ({ history }) =>
                       {activeAudio?.entryId === entry.id && isSpeaking && (
                         <span className="text-[10px] text-teal-300 uppercase tracking-wide animate-pulse">
                           Speaking...
+                        </span>
+                      )}
+                      {autoplayBlockedEntryId === entry.id && (
+                        <span className="text-[10px] text-amber-300 tracking-wide">
+                          Autoplay blocked; click Replay voice
                         </span>
                       )}
                    </div>
