@@ -1,6 +1,81 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildGameState } from '../tests/fixtures';
 
+describe('getClientIp', () => {
+  const envBackup = { ...process.env };
+
+  afterEach(() => {
+    process.env = { ...envBackup };
+    vi.resetModules();
+  });
+
+  it('ignores spoofed x-forwarded-for when request does not come from a trusted proxy', async () => {
+    process.env.TURN_TRUSTED_PROXY_CIDRS = '10.0.0.0/8';
+
+    const { getClientIp } = await import('./turn');
+
+    const ip = getClientIp({
+      headers: {
+        'x-forwarded-for': '203.0.113.9, 198.51.100.4'
+      },
+      socket: {
+        remoteAddress: '198.51.100.30'
+      }
+    });
+
+    expect(ip).toBe('198.51.100.30');
+  });
+
+  it('returns last untrusted hop from x-forwarded-for when chained trusted proxies are present', async () => {
+    process.env.TURN_TRUSTED_PROXY_CIDRS = '127.0.0.0/8,10.0.0.0/8';
+
+    const { getClientIp } = await import('./turn');
+
+    const ip = getClientIp({
+      headers: {
+        'x-forwarded-for': '198.51.100.9, 203.0.113.7, 10.0.0.5'
+      },
+      socket: {
+        remoteAddress: '127.0.0.1'
+      }
+    });
+
+    expect(ip).toBe('203.0.113.7');
+  });
+
+
+  it('returns unknown when socket.remoteAddress is missing even if x-forwarded-for is present', async () => {
+    process.env.TURN_TRUSTED_PROXY_CIDRS = '127.0.0.0/8';
+
+    const { getClientIp } = await import('./turn');
+
+    const ip = getClientIp({
+      headers: {
+        'x-forwarded-for': '198.51.100.23, 127.0.0.1'
+      },
+      socket: {}
+    });
+
+    expect(ip).toBe('unknown');
+  });
+  it('falls back to socket.remoteAddress when x-forwarded-for values are invalid', async () => {
+    process.env.TURN_TRUSTED_PROXY_CIDRS = '127.0.0.0/8';
+
+    const { getClientIp } = await import('./turn');
+
+    const ip = getClientIp({
+      headers: {
+        'x-forwarded-for': 'unknown, also-not-an-ip'
+      },
+      socket: {
+        remoteAddress: '127.0.0.44'
+      }
+    });
+
+    expect(ip).toBe('127.0.0.44');
+  });
+});
+
 describe('api/turn request validation', () => {
   const envBackup = { ...process.env };
 
