@@ -31,10 +31,12 @@ import {
 import { TurnTimeoutError, executeTurn } from './services/turnService';
 import { TURN_TIMEOUT_MS } from './services/config';
 
-const SYSTEM_STABILIZED_MESSAGE = '[SYSTEM: Cognitive divergence detected. World state stabilized.]';
-const SYSTEM_MISSING_TERMINAL_MESSAGE = '[SYSTEM: Turn finalized with fallback (missing terminal chunk).]';
 const MAX_WORLD_FACTS = 50;
 const AUTO_SAVE_DEBOUNCE_MS = 500;
+
+const buildFallbackSystemMessage = (reason: string): string => {
+  return `[SYSTEM: ${reason}. World state stabilized.]`;
+};
 
 // --- State Management ---
 
@@ -401,11 +403,11 @@ export default function App() {
     } catch (error) {
       console.error("Turn failed", error);
       if (error instanceof TurnTimeoutError) {
-        finalizeWithFallback(`[SYSTEM: Stream timeout detected after ${TURN_TIMEOUT_MS}ms. World state stabilized.]`);
+        finalizeWithFallback(buildFallbackSystemMessage(`Stream timeout detected after ${TURN_TIMEOUT_MS}ms`));
         return;
       }
 
-      finalizeWithFallback(`${SYSTEM_STABILIZED_MESSAGE} (${SYSTEM_MISSING_TERMINAL_MESSAGE})`);
+      finalizeWithFallback(buildFallbackSystemMessage('Turn finalized with fallback (missing terminal chunk)'));
     }
   }, [gameState]);
 
