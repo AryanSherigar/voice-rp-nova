@@ -1,4 +1,5 @@
 import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
+import { BlockList, isIP } from 'node:net';
 import type { GameState, PlayerInput, TurnResponse, DirectorAgentResponse, WorldUpdateResponse } from '../types';
 
 const NARRATOR_MODEL = process.env.BEDROCK_NARRATOR_MODEL_ID;
@@ -23,6 +24,7 @@ const MAX_STORY_CARDS = 40;
 const MAX_CHARACTERS = 25;
 const MAX_LOCATIONS = 50;
 const MAX_STORY_CARD_KEYS = 20;
+const DEFAULT_TRUSTED_PROXY_CIDRS = ['127.0.0.0/8', '::1/128'];
 
 type RateLimitRecord = { count: number; windowStart: number };
 
@@ -402,13 +404,133 @@ const setStoryCardEmbeddingCache = (key: string, embedding: number[], now: numbe
   }
 };
 
-const getClientIp = (req: any): string => {
-  const forwarded = req.headers['x-forwarded-for'];
-  if (typeof forwarded === 'string' && forwarded.length > 0) {
-    return forwarded.split(',')[0].trim();
+let trustedProxyBlockListCache: { key: string; blockList: BlockList } | null = null;
+
+const normalizeIp = (value: unknown): string | null => {
+  if (typeof value !== 'string') {
+    return null;
   }
 
-  return req.socket?.remoteAddress || 'unknown';
+  let candidate = value.trim();
+  if (!candidate) {
+    return null;
+  }
+
+  if (candidate.startsWith('[') && candidate.endsWith(']')) {
+    candidate = candidate.slice(1, -1).trim();
+  }
+
+  if (/^\d{1,3}(?:\.\d{1,3}){3}:\d+$/.test(candidate)) {
+    candidate = candidate.split(':')[0].trim();
+  }
+
+  if (candidate.toLowerCase().startsWith('::ffff:')) {
+    const mappedIpv4 = candidate.slice(7);
+    if (isIP(mappedIpv4) === 4) {
+      candidate = mappedIpv4;
+    }
+  }
+
+  return isIP(candidate) > 0 ? candidate : null;
+};
+
+const parseForwardedFor = (value: unknown): string[] => {
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => parseForwardedFor(entry));
+  }
+
+  if (typeof value !== 'string') {
+    return [];
+  }
+
+  return value
+    .split(',')
+    .map((entry) => normalizeIp(entry))
+    .filter((entry): entry is string => Boolean(entry));
+};
+
+const getTrustedProxyCidrs = (): string[] => {
+  const configured = process.env.TURN_TRUSTED_PROXY_CIDRS;
+  if (typeof configured !== 'string' || !configured.trim()) {
+    return DEFAULT_TRUSTED_PROXY_CIDRS;
+  }
+
+  return configured
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+};
+
+const getTrustedProxyBlockList = (): BlockList => {
+  const cidrs = getTrustedProxyCidrs();
+  const cacheKey = cidrs.join(',');
+
+  if (trustedProxyBlockListCache?.key === cacheKey) {
+    return trustedProxyBlockListCache.blockList;
+  }
+
+  const blockList = new BlockList();
+  for (const entry of cidrs) {
+    const [rawAddress, rawPrefix] = entry.split('/');
+    const address = normalizeIp(rawAddress);
+    if (!address) {
+      continue;
+    }
+
+    const family = isIP(address);
+    const type = family === 4 ? 'ipv4' : 'ipv6';
+    if (!rawPrefix) {
+      blockList.addAddress(address, type);
+      continue;
+    }
+
+    const prefix = Number.parseInt(rawPrefix, 10);
+    if (!Number.isFinite(prefix)) {
+      continue;
+    }
+
+    try {
+      blockList.addSubnet(address, prefix, type);
+    } catch {
+      // ignore invalid CIDR values
+    }
+  }
+
+  trustedProxyBlockListCache = { key: cacheKey, blockList };
+  return blockList;
+};
+
+const isTrustedProxyIp = (ip: string): boolean => {
+  const family = isIP(ip);
+  if (family === 0) {
+    return false;
+  }
+
+  const type = family === 4 ? 'ipv4' : 'ipv6';
+  return getTrustedProxyBlockList().check(ip, type);
+};
+
+export const getClientIp = (req: any): string => {
+  const remoteAddress = normalizeIp(req.socket?.remoteAddress);
+  const forwardedIps = parseForwardedFor(req.headers['x-forwarded-for']);
+
+  if (!remoteAddress) {
+    return forwardedIps[0] ?? 'unknown';
+  }
+
+  if (forwardedIps.length === 0 || !isTrustedProxyIp(remoteAddress)) {
+    return remoteAddress;
+  }
+
+  const hopChain = [...forwardedIps, remoteAddress];
+  for (let i = hopChain.length - 1; i >= 0; i -= 1) {
+    const hopIp = hopChain[i];
+    if (!isTrustedProxyIp(hopIp)) {
+      return hopIp;
+    }
+  }
+
+  return forwardedIps[0] ?? remoteAddress;
 };
 
 const isRateLimited = (ip: string): boolean => {
