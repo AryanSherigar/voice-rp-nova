@@ -17,6 +17,7 @@ export interface CharacterState {
   name: string;
   role: string;
   description: string;
+  goal?: string;
   emotions: EmotionModel;
   status: string; // e.g., "Healthy", "Injured", "Suspicious"
 }
@@ -163,6 +164,7 @@ export interface CreateStoryFormData {
     name: string;
     role: string;
     description: string;
+    goal?: string;
     lore?: string; // New field for character backstory/secrets
   }[];
 }
