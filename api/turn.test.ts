@@ -124,4 +124,78 @@ describe('api/turn request validation', () => {
     expect(statusCode).toBe(400);
     expect(payload).toEqual({ error: 'Invalid input.type: expected one of DO, SAY, STORY.' });
   });
+
+  it('fails open on limiter provider errors when TURN_RATE_LIMIT_FAIL_MODE is open', async () => {
+    process.env.TURN_RATE_LIMIT_PROVIDER = 'upstash';
+    process.env.TURN_RATE_LIMIT_UPSTASH_URL = 'https://example-rate-limit.upstash.io';
+    process.env.TURN_RATE_LIMIT_UPSTASH_TOKEN = 'token';
+    process.env.TURN_RATE_LIMIT_FAIL_MODE = 'open';
+    process.env.AWS_REGION = 'us-east-1';
+    process.env.BEDROCK_NARRATOR_MODEL_ID = 'narrator-model';
+    process.env.BEDROCK_DIRECTOR_MODEL_ID = 'director-model';
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('network down')));
+
+    const { default: handler } = await import('./turn');
+
+    let statusCode = 0;
+    let payload: any;
+    const req = {
+      method: 'POST',
+      headers: { host: 'example.com' },
+      socket: { remoteAddress: '127.0.0.1' },
+      body: {},
+    };
+    const res = {
+      status(code: number) {
+        statusCode = code;
+        return this;
+      },
+      json(data: any) {
+        payload = data;
+        return this;
+      },
+    };
+
+    await handler(req, res);
+
+    expect(statusCode).toBe(400);
+    expect(payload).toEqual({ error: 'Expected request body with { state, input }.' });
+  });
+
+  it('fails closed on limiter provider errors when TURN_RATE_LIMIT_FAIL_MODE is closed', async () => {
+    process.env.TURN_RATE_LIMIT_PROVIDER = 'upstash';
+    process.env.TURN_RATE_LIMIT_UPSTASH_URL = 'https://example-rate-limit.upstash.io';
+    process.env.TURN_RATE_LIMIT_UPSTASH_TOKEN = 'token';
+    process.env.TURN_RATE_LIMIT_FAIL_MODE = 'closed';
+    process.env.AWS_REGION = 'us-east-1';
+    process.env.BEDROCK_NARRATOR_MODEL_ID = 'narrator-model';
+    process.env.BEDROCK_DIRECTOR_MODEL_ID = 'director-model';
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('network down')));
+
+    const { default: handler } = await import('./turn');
+
+    let statusCode = 0;
+    let payload: any;
+    const req = {
+      method: 'POST',
+      headers: { host: 'example.com' },
+      socket: { remoteAddress: '127.0.0.1' },
+      body: {},
+    };
+    const res = {
+      status(code: number) {
+        statusCode = code;
+        return this;
+      },
+      json(data: any) {
+        payload = data;
+        return this;
+      },
+    };
+
+    await handler(req, res);
+
+    expect(statusCode).toBe(429);
+    expect(payload).toEqual({ error: 'Rate limit exceeded. Try again later.' });
+  });
 });

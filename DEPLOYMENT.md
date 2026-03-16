@@ -31,3 +31,22 @@ This project now uses a single dependency source: `package.json` / `package-lock
    ```
 
 The generated static assets are emitted to `dist/` by Vite and can be deployed to any static host.
+
+## API turn rate limiting
+
+`api/turn.ts` uses a distributed limiter (Upstash Redis REST pipeline) and intentionally does **not** fall back to process memory. Configure:
+
+- `TURN_RATE_LIMIT_PROVIDER` (default: `upstash`)
+- `TURN_RATE_LIMIT_UPSTASH_URL` (required to enable limiter)
+- `TURN_RATE_LIMIT_UPSTASH_TOKEN` (required to enable limiter)
+- `TURN_RATE_LIMIT_KEY_PREFIX` (optional, default: `turn-api:rate-limit`)
+- `TURN_RATE_LIMIT_FAIL_MODE` (`open` default, or `closed`)
+
+Semantics remain fixed-window with the existing values in code (`60s` window, `20` max requests per key/IP).
+
+Failure behavior is explicit:
+
+- `open`: if the provider call fails, request is allowed through.
+- `closed`: if the provider call fails, request is rejected with HTTP 429.
+
+If the Upstash URL/token are missing, the limiter is disabled and the API logs a warning once at runtime (no in-memory fallback).
