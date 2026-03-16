@@ -2,6 +2,16 @@ import React, { useState } from 'react';
 import { CreateStoryFormData } from '../types';
 import { Button } from './Button';
 
+const MIN_CHARACTERS = 2;
+
+const createEmptyCharacter = () => ({
+  name: '',
+  role: '',
+  description: '',
+  goal: '',
+  lore: ''
+});
+
 interface Props {
   onSubmit: (data: CreateStoryFormData) => void;
   onCancel: () => void;
@@ -12,10 +22,7 @@ export const CreateStory: React.FC<Props> = ({ onSubmit, onCancel }) => {
     title: '',
     settingName: '',
     settingDescription: '',
-    characters: [
-      { name: '', role: '', description: '', goal: '', lore: '' },
-      { name: '', role: '', description: '', goal: '', lore: '' }
-    ]
+    characters: [createEmptyCharacter(), createEmptyCharacter()]
   });
 
   const handleCharChange = (index: number, field: string, value: string) => {
@@ -24,7 +31,31 @@ export const CreateStory: React.FC<Props> = ({ onSubmit, onCancel }) => {
     setFormData({ ...formData, characters: newChars });
   };
 
-  const isFormValid = formData.title && formData.settingName && formData.characters[0].name;
+  const addCharacter = () => {
+    setFormData({
+      ...formData,
+      characters: [...formData.characters, createEmptyCharacter()]
+    });
+  };
+
+  const removeCharacter = (index: number) => {
+    if (formData.characters.length <= MIN_CHARACTERS) {
+      return;
+    }
+
+    setFormData({
+      ...formData,
+      characters: formData.characters.filter((_, charIndex) => charIndex !== index)
+    });
+  };
+
+  const hasMinimumCharacters = formData.characters.length >= MIN_CHARACTERS;
+  const hasRequiredCharacterNames = formData.characters.every(char => char.name.trim().length > 0);
+  const isFormValid =
+    formData.title.trim().length > 0 &&
+    formData.settingName.trim().length > 0 &&
+    hasMinimumCharacters &&
+    hasRequiredCharacterNames;
 
   return (
     <div className="min-h-screen bg-[#050505] p-6 overflow-y-auto">
@@ -81,10 +112,20 @@ export const CreateStory: React.FC<Props> = ({ onSubmit, onCancel }) => {
                 <span className="w-1.5 h-1.5 bg-orange-500 rounded-full"></span>
                 Entity Definitions
             </h3>
+            <p className="text-xs text-slate-500">At least {MIN_CHARACTERS} characters are required to initialize.</p>
             <div className="space-y-4">
               {formData.characters.map((char, i) => (
                 <div key={i} className="bg-[#050505] p-5 rounded-xl border border-white/5 hover:border-white/10 transition-colors">
-                  <span className="text-[10px] text-orange-500 font-bold uppercase mb-4 block tracking-widest">Entity {i + 1}</span>
+                  <div className="flex items-center justify-between mb-4">
+                    <span className="text-[10px] text-orange-500 font-bold uppercase block tracking-widest">Entity {i + 1}</span>
+                    <Button
+                      variant="ghost"
+                      onClick={() => removeCharacter(i)}
+                      disabled={formData.characters.length <= MIN_CHARACTERS}
+                    >
+                      Remove
+                    </Button>
+                  </div>
                   <div className="grid grid-cols-2 gap-4 mb-4">
                     <input 
                       className="bg-[#0F1218] border border-white/10 rounded-lg p-2.5 text-sm text-slate-200 focus:border-orange-500 focus:outline-none"
@@ -122,6 +163,7 @@ export const CreateStory: React.FC<Props> = ({ onSubmit, onCancel }) => {
                 </div>
               ))}
             </div>
+            <Button variant="ghost" onClick={addCharacter}>Add character</Button>
           </section>
 
           <div className="flex justify-between pt-8 border-t border-white/5">
