@@ -1046,6 +1046,42 @@ const callAgent = async (client: BedrockRuntimeClient, modelId: string, prompt: 
   return text;
 };
 
+const isUnsupportedModelActionError = (error: unknown): boolean => {
+  const message = error instanceof Error ? error.message.toLowerCase() : '';
+  if (!message) {
+    return false;
+  }
+
+  return (
+    message.includes("doesn't support the model") ||
+    message.includes('not supported') ||
+    message.includes('supported text or chat model')
+  );
+};
+
+const callAgentWithUnsupportedModelFallback = async (
+  client: BedrockRuntimeClient,
+  primaryModelId: string,
+  fallbackModelId: string | undefined,
+  prompt: string,
+): Promise<{ text: string; usedFallback: boolean; warning?: string }> => {
+  try {
+    const text = await callAgent(client, primaryModelId, prompt);
+    return { text, usedFallback: false };
+  } catch (error) {
+    if (!fallbackModelId || fallbackModelId === primaryModelId || !isUnsupportedModelActionError(error)) {
+      throw error;
+    }
+
+    const text = await callAgent(client, fallbackModelId, prompt);
+    return {
+      text,
+      usedFallback: true,
+      warning: `Narrator model ${primaryModelId} is unsupported for this action; used fallback model ${fallbackModelId}.`,
+    };
+  }
+};
+
 export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'Method Not Allowed' });
@@ -1105,15 +1141,22 @@ export default async function handler(req: any, res: any) {
     const stageLatenciesMs: Record<string, number> = {};
 
     const agent1Start = Date.now();
-    const agent1Raw = await callAgent(client, NARRATOR_MODEL, buildAgent1Prompt(context));
+    const agent1Call = await callAgentWithUnsupportedModelFallback(client, NARRATOR_MODEL, DIRECTOR_MODEL, buildAgent1Prompt(context));
+    const agent1Raw = agent1Call.text;
     stageLatenciesMs['agent1:narration'] = Date.now() - agent1Start;
     const parsedAgent1 = parseAgent1Response(agent1Raw);
     const agent1 = parsedAgent1.response;
 
     const traceMetadata: TraceMetadata = {
-      ...(parsedAgent1.warning ? { warnings: [parsedAgent1.warning] } : {}),
+      ...(parsedAgent1.warning || agent1Call.warning ? { warnings: [parsedAgent1.warning, agent1Call.warning].filter((warning): warning is string => Boolean(warning)) } : {}),
       ...(usedKeywordFallback
-        ? { warnings: [...(parsedAgent1.warning ? [parsedAgent1.warning] : []), 'Story-card embeddings unavailable; used keyword matcher fallback.'] }
+        ? {
+          warnings: [
+            ...(parsedAgent1.warning ? [parsedAgent1.warning] : []),
+            ...(agent1Call.warning ? [agent1Call.warning] : []),
+            'Story-card embeddings unavailable; used keyword matcher fallback.',
+          ],
+        }
         : {}),
     };
 
