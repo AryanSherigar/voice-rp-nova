@@ -1,4 +1,4 @@
-import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
+import { BedrockRuntimeClient, ConverseCommand, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
 import { BlockList, isIP } from 'node:net';
 import type { GameState, PlayerInput, TurnResponse, DirectorAgentResponse, WorldUpdateResponse } from '../types';
 
@@ -1026,27 +1026,24 @@ const assembleTurnResponse = (
 });
 
 const callAgent = async (client: BedrockRuntimeClient, modelId: string, prompt: string): Promise<string> => {
-  const payload = {
-    messages: [{ role: 'user', content: [{ text: prompt }] }],
-    inferenceConfig: {
-      temperature: 0.4,
-    },
-  };
-
   const response = await client.send(
-    new InvokeModelCommand({
+    new ConverseCommand({
       modelId,
-      contentType: 'application/json',
-      accept: 'application/json',
-      body: JSON.stringify(payload),
+      messages: [{ role: 'user', content: [{ text: prompt }] }],
+      inferenceConfig: {
+        temperature: 0.4,
+      },
     }),
   );
 
-  const rawBody = new TextDecoder().decode(response.body);
-  const parsed = JSON.parse(rawBody) as { output?: { message?: { content?: Array<{ text?: string }> } } };
-  const text = parsed.output?.message?.content?.find((part) => typeof part.text === 'string')?.text?.trim();
+  const parts = response.output?.message?.content ?? [];
+  const text = parts
+    .map((part) => (typeof part.text === 'string' ? part.text.trim() : ''))
+    .filter(Boolean)
+    .join('\n')
+    .trim();
 
-  return text || '';
+  return text;
 };
 
 export default async function handler(req: any, res: any) {
