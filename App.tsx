@@ -68,6 +68,14 @@ export function gameReducer(state: GameState | null, action: Action): GameState 
   }
   if (!state) return null;
 
+  const clampDNAValue = (nextValue: unknown, currentValue: number): number => {
+    const numericValue = typeof nextValue === 'number' && Number.isFinite(nextValue)
+      ? nextValue
+      : currentValue;
+
+    return Math.min(100, Math.max(0, numericValue));
+  };
+
   switch (action.type) {
     case 'START_TURN':
       return { ...state, isProcessing: true };
@@ -121,6 +129,7 @@ export function gameReducer(state: GameState | null, action: Action): GameState 
       // Reset card activity on new turn (could be enhanced to highlight cards used in *this* turn if backend returned them)
       const resetCards = state.storyCards.map(c => ({ ...c, isActive: false }));
 
+      const dnaShift = world.dnaShift || {};
       const newState = {
         ...state,
         tick: state.tick + 1,
@@ -133,7 +142,13 @@ export function gameReducer(state: GameState | null, action: Action): GameState 
         },
         directorState: director,
         storyCards: resetCards,
-        storyDNA: { ...state.storyDNA, ...(world.dnaShift || {}) }
+        storyDNA: {
+          ...state.storyDNA,
+          ...dnaShift,
+          orderChaos: clampDNAValue(dnaShift.orderChaos, state.storyDNA.orderChaos),
+          hopeDespair: clampDNAValue(dnaShift.hopeDespair, state.storyDNA.hopeDespair),
+          trustBetrayal: clampDNAValue(dnaShift.trustBetrayal, state.storyDNA.trustBetrayal)
+        }
       };
 
       return newState;

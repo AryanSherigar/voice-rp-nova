@@ -30,4 +30,34 @@ describe('gameReducer END_TURN world facts behavior', () => {
     expect(nextState?.world.facts[0]).toBe('fact-3');
     expect(nextState?.world.facts.slice(-2)).toEqual(['fact-51', 'fact-52']);
   });
+
+  it('clamps dnaShift values and falls back to existing values for invalid input', () => {
+    const state = buildGameState();
+
+    const nextState = gameReducer(state, {
+      type: 'END_TURN',
+      payload: {
+        director: {
+          pacing: 'Normal',
+          tension: 60,
+          narrativeFocus: 'Escalation',
+          suggestedHints: []
+        },
+        world: {
+          narrative: 'DNA changed',
+          characterUpdates: [],
+          dnaShift: {
+            orderChaos: 150,
+            hopeDespair: -12,
+            trustBetrayal: Number.NaN
+          }
+        }
+      }
+    });
+
+    expect(nextState).not.toBeNull();
+    expect(nextState?.storyDNA.orderChaos).toBe(100);
+    expect(nextState?.storyDNA.hopeDespair).toBe(0);
+    expect(nextState?.storyDNA.trustBetrayal).toBe(state.storyDNA.trustBetrayal);
+  });
 });
