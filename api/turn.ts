@@ -9,7 +9,6 @@ const EMBEDDING_MODEL = process.env.BEDROCK_EMBEDDING_MODEL_ID;
 const BEDROCK_REGION = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION;
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_REQUESTS = 20;
-const RATE_LIMIT_SWEEP_INTERVAL_MS = Number.parseInt(process.env.RATE_LIMIT_SWEEP_INTERVAL_MS ?? `${5 * 60_000}`, 10);
 const STORY_CARD_TOP_K = Number.parseInt(process.env.STORY_CARD_TOP_K ?? '3', 10);
 const STORY_CARD_SIMILARITY_THRESHOLD = Number.parseFloat(process.env.STORY_CARD_SIMILARITY_THRESHOLD ?? '0.35');
 const STORY_CARD_EMBEDDING_CACHE_TTL_MS = Number.parseInt(process.env.STORY_CARD_EMBEDDING_CACHE_TTL_MS ?? `${30 * 60_000}`, 10);
@@ -27,7 +26,7 @@ const MAX_LOCATIONS = 50;
 const MAX_STORY_CARD_KEYS = 20;
 const DEFAULT_TRUSTED_PROXY_CIDRS = ['127.0.0.0/8', '::1/128'];
 
-type RateLimitRecord = { count: number; windowStart: number };
+type RateLimitFailureMode = 'open' | 'closed';
 
 type Agent1Response = {
   transcript: string;
@@ -335,21 +334,16 @@ const validateState = (state: unknown): ValidationResult<GameState> => {
   return { ok: true, value: validatedState };
 };
 
-// Best-effort process-memory stores: entries are not shared across instances and can be lost on restart.
-const rateLimitStore = new Map<string, RateLimitRecord>();
+// Embedding cache is process-memory by design (safe to recompute and already has keyword fallback).
 const storyCardEmbeddingStore = new Map<string, StoryCardEmbeddingCacheEntry>();
-let lastRateLimitSweepAt = 0;
 let lastStoryCardEmbeddingSweepAt = 0;
+let didLogRateLimitProviderWarning = false;
 
-const sweepRateLimitStore = (now: number): void => {
-  for (const [key, value] of rateLimitStore.entries()) {
-    if (now - value.windowStart > RATE_LIMIT_WINDOW_MS) {
-      rateLimitStore.delete(key);
-    }
-  }
-
-  lastRateLimitSweepAt = now;
-};
+const RATE_LIMIT_PROVIDER = (process.env.TURN_RATE_LIMIT_PROVIDER ?? 'upstash').trim().toLowerCase();
+const RATE_LIMIT_FAIL_MODE: RateLimitFailureMode = process.env.TURN_RATE_LIMIT_FAIL_MODE === 'closed' ? 'closed' : 'open';
+const RATE_LIMIT_UPSTASH_URL = process.env.TURN_RATE_LIMIT_UPSTASH_URL?.trim();
+const RATE_LIMIT_UPSTASH_TOKEN = process.env.TURN_RATE_LIMIT_UPSTASH_TOKEN?.trim();
+const RATE_LIMIT_KEY_PREFIX = process.env.TURN_RATE_LIMIT_KEY_PREFIX?.trim() || 'turn-api:rate-limit';
 
 const sweepStoryCardEmbeddingStore = (now: number): void => {
   for (const [key, value] of storyCardEmbeddingStore.entries()) {
@@ -536,23 +530,68 @@ export const getClientIp = (req: any): string => {
   return forwardedIps[0] ?? remoteAddress;
 };
 
-const isRateLimited = (ip: string): boolean => {
-  const now = Date.now();
-
-  if (now - lastRateLimitSweepAt >= RATE_LIMIT_SWEEP_INTERVAL_MS) {
-    sweepRateLimitStore(now);
-  }
-
-  const existing = rateLimitStore.get(ip);
-
-  if (!existing || now - existing.windowStart > RATE_LIMIT_WINDOW_MS) {
-    rateLimitStore.set(ip, { count: 1, windowStart: now });
+const hasDistributedRateLimitProvider = (): boolean => {
+  if (RATE_LIMIT_PROVIDER !== 'upstash') {
     return false;
   }
 
-  existing.count += 1;
-  rateLimitStore.set(ip, existing);
-  return existing.count > RATE_LIMIT_MAX_REQUESTS;
+  return Boolean(RATE_LIMIT_UPSTASH_URL && RATE_LIMIT_UPSTASH_TOKEN);
+};
+
+const incrementDistributedRateLimit = async (ip: string): Promise<number> => {
+  if (RATE_LIMIT_PROVIDER !== 'upstash' || !RATE_LIMIT_UPSTASH_URL || !RATE_LIMIT_UPSTASH_TOKEN) {
+    throw new Error('Distributed rate-limit provider is not configured.');
+  }
+
+  const key = `${RATE_LIMIT_KEY_PREFIX}:${ip}`;
+  const response = await fetch(`${RATE_LIMIT_UPSTASH_URL}/pipeline`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${RATE_LIMIT_UPSTASH_TOKEN}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify([
+      ['INCR', key],
+      ['PEXPIRE', key, RATE_LIMIT_WINDOW_MS, 'NX'],
+    ]),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Provider HTTP ${response.status}`);
+  }
+
+  const payload = (await response.json()) as Array<{ result?: unknown; error?: string }>;
+  const incrementResult = payload?.[0];
+  if (incrementResult?.error) {
+    throw new Error(`Provider increment error: ${incrementResult.error}`);
+  }
+
+  const count = Number(incrementResult?.result);
+  if (!Number.isFinite(count)) {
+    throw new Error('Provider returned non-numeric INCR result.');
+  }
+
+  return count;
+};
+
+const isRateLimited = async (ip: string): Promise<boolean> => {
+  if (!hasDistributedRateLimitProvider()) {
+    if (!didLogRateLimitProviderWarning) {
+      didLogRateLimitProviderWarning = true;
+      console.warn('Distributed rate limit provider is not configured; TURN rate limiting is disabled.');
+    }
+
+    return false;
+  }
+
+  try {
+    const count = await incrementDistributedRateLimit(ip);
+    return count > RATE_LIMIT_MAX_REQUESTS;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    console.error(`Distributed rate limiter failed (${message}). Fail mode: ${RATE_LIMIT_FAIL_MODE}.`);
+    return RATE_LIMIT_FAIL_MODE === 'closed';
+  }
 };
 
 const isAuthorized = (req: any): boolean => {
@@ -985,7 +1024,7 @@ export default async function handler(req: any, res: any) {
   }
 
   const clientIp = getClientIp(req);
-  if (isRateLimited(clientIp)) {
+  if (await isRateLimited(clientIp)) {
     res.status(429).json({ error: 'Rate limit exceeded. Try again later.' });
     return;
   }
