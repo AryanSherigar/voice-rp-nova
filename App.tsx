@@ -234,7 +234,7 @@ export default function App() {
   const startScenario = (scenario: ScenarioTemplate) => {
     // Generate a fresh unique ID for new scenario instances so they don't overwrite the template slots if we had them
     const freshState = {
-      ...scenario.initialState,
+      ...scenario.initialStateFactory(),
       id: generateId('game'),
       lastPlayed: Date.now()
     };

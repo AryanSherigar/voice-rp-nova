@@ -152,7 +152,7 @@ export interface ScenarioTemplate {
   id: string;
   title: string;
   description: string;
-  initialState: GameState;
+  initialStateFactory: () => GameState;
 }
 
 export interface CreateStoryFormData {
