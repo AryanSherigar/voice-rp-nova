@@ -7,9 +7,10 @@ interface Props {
   onSelectScenario: (scenario: ScenarioTemplate) => void;
   onLoadGame: (state: GameState) => void;
   onCreateNew: () => void;
+  onStorageWarning: (warning: string) => void;
 }
 
-export const Hub: React.FC<Props> = ({ onSelectScenario, onLoadGame, onCreateNew }) => {
+export const Hub: React.FC<Props> = ({ onSelectScenario, onLoadGame, onCreateNew, onStorageWarning }) => {
   const [saves, setSaves] = useState<SaveMetadata[]>([]);
 
   useEffect(() => {
@@ -17,20 +18,36 @@ export const Hub: React.FC<Props> = ({ onSelectScenario, onLoadGame, onCreateNew
   }, []);
 
   const refreshSaves = () => {
-    setSaves(getSavedGames());
+    const result = getSavedGames();
+    if (!result.ok) {
+      onStorageWarning(result.error.message);
+      return;
+    }
+
+    setSaves(result.data);
   };
 
   const handleLoad = (id: string) => {
-    const state = loadGame(id);
-    if (state) {
-      onLoadGame(state);
+    const result = loadGame(id);
+    if (!result.ok) {
+      onStorageWarning(result.error.message);
+      return;
+    }
+
+    if (result.data) {
+      onLoadGame(result.data);
     }
   };
 
   const handleDelete = (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
     if (window.confirm("Are you sure you want to delete this story?")) {
-      deleteGame(id);
+      const result = deleteGame(id);
+      if (!result.ok) {
+        onStorageWarning(result.error.message);
+        return;
+      }
+
       refreshSaves();
     }
   };
