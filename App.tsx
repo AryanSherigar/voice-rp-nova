@@ -42,6 +42,7 @@ type Action =
   | { type: 'STREAM_UPDATE'; payload: { description: string; audioBase64?: string; audioMimeType?: string } }
   | { type: 'END_TURN'; payload: { director: DirectorAgentResponse; world: WorldUpdateResponse } }
   | { type: 'ADD_LOG'; payload: EventLogEntry }
+  | { type: 'APPEND_SYSTEM_LOG'; payload: { description: string } }
   | { type: 'INIT_GAME'; payload: GameState }
   | { type: 'RESET_GAME' }
   // Story Card Actions
@@ -82,6 +83,18 @@ export function gameReducer(state: GameState | null, action: Action): GameState 
 
     case 'ADD_LOG':
       return { ...state, history: [...state.history, action.payload] };
+
+    case 'APPEND_SYSTEM_LOG': {
+      const systemEntry: EventLogEntry = {
+        id: generateId('sys'),
+        tick: state.tick,
+        type: 'DIRECTOR',
+        description: action.payload.description,
+        timestamp: Date.now()
+      };
+
+      return { ...state, history: [...state.history, systemEntry] };
+    }
 
     case 'STREAM_UPDATE': {
       const narratorEntry: EventLogEntry = {
@@ -303,16 +316,7 @@ export default function App() {
     setLastTurnTrace(null);
 
     const appendSystemLog = (description: string) => {
-      dispatch({
-        type: 'ADD_LOG',
-        payload: {
-          id: generateId('sys'),
-          tick: gameState.tick + 1,
-          type: 'DIRECTOR',
-          description,
-          timestamp: Date.now()
-        }
-      });
+      dispatch({ type: 'APPEND_SYSTEM_LOG', payload: { description } });
     };
 
     const finalizeWithFallback = (description: string) => {
