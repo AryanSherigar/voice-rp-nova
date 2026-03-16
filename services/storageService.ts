@@ -20,11 +20,22 @@ export interface SaveMetadata {
  * Saves the game state to LocalStorage.
  * Updates the 'lastPlayed' timestamp.
  */
-export const saveGame = (state: GameState): void => {
+interface SaveGameOptions {
+  force?: boolean;
+}
+
+export const saveGame = (state: GameState, options?: SaveGameOptions): void => {
   try {
     const saves = loadAllSavesRaw();
+    const sanitizedState = sanitizeSaveState(state);
+    const existingState = saves[state.id];
+
+    if (!options?.force && existingState && areSnapshotsEqual(existingState, sanitizedState)) {
+      return;
+    }
+
     const updatedState = {
-      ...sanitizeSaveState(state),
+      ...sanitizedState,
       lastPlayed: Date.now()
     };
     saves[state.id] = updatedState;
@@ -108,6 +119,16 @@ const writeSavesPayload = (saves: Record<string, GameState>): void => {
   };
 
   localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+};
+
+
+const stripLastPlayed = (state: GameState): Omit<GameState, 'lastPlayed'> => {
+  const { lastPlayed: _lastPlayed, ...rest } = state;
+  return rest;
+};
+
+const areSnapshotsEqual = (previous: GameState, next: GameState): boolean => {
+  return JSON.stringify(stripLastPlayed(previous)) === JSON.stringify(stripLastPlayed(next));
 };
 
 const sanitizeSaveState = (state: GameState): GameState => ({

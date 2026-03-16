@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { getSavedGames } from './storageService';
+import { getSavedGames, saveGame } from './storageService';
 import { buildGameState } from '../tests/fixtures';
 
 const createStorage = () => {
@@ -36,5 +36,34 @@ describe('getSavedGames preview text', () => {
 
     expect(saves).toHaveLength(1);
     expect(saves[0].previewText).toBe('No history.');
+  });
+});
+
+
+describe('saveGame snapshot behavior', () => {
+  beforeEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('skips localStorage writes for unchanged snapshots unless forced', () => {
+    const localStorageMock = createStorage();
+    vi.stubGlobal('localStorage', localStorageMock);
+
+    const nowSpy = vi.spyOn(Date, 'now');
+    nowSpy.mockReturnValue(1000);
+
+    const state = buildGameState();
+    saveGame(state);
+    expect(localStorageMock.setItem).toHaveBeenCalledTimes(1);
+
+    nowSpy.mockReturnValue(2000);
+    saveGame(state);
+    expect(localStorageMock.setItem).toHaveBeenCalledTimes(1);
+
+    nowSpy.mockReturnValue(3000);
+    saveGame(state, { force: true });
+    expect(localStorageMock.setItem).toHaveBeenCalledTimes(2);
+
+    nowSpy.mockRestore();
   });
 });
