@@ -1,5 +1,5 @@
 import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
-import type { GameState, PlayerInput, TurnResponse, DirectorAgentResponse, WorldUpdateResponse } from '../types';
+import { InputType, type GameState, type PlayerInput, type TurnResponse, type DirectorAgentResponse, type WorldUpdateResponse } from '../types';
 
 const NARRATOR_MODEL = process.env.BEDROCK_NARRATOR_MODEL_ID;
 const DIRECTOR_MODEL = process.env.BEDROCK_DIRECTOR_MODEL_ID;
@@ -120,10 +120,12 @@ const validateInput = (input: unknown): ValidationResult<PlayerInput> => {
     return { ok: false, error: 'Invalid input: isVoice=true requires input.audioBase64.' };
   }
 
+  const normalizedType = input.type === 'DO' ? InputType.DO : input.type === 'SAY' ? InputType.SAY : InputType.STORY;
+
   return {
     ok: true,
     value: {
-      type: input.type,
+      type: normalizedType,
       content: clampPromptString(content, MAX_INPUT_CONTENT_LENGTH),
       ...(isVoice ? { isVoice: true } : {}),
       ...(audioBase64 ? { audioBase64 } : {}),
