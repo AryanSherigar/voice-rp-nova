@@ -1,4 +1,4 @@
-import React, { useReducer, useCallback, useState, useEffect } from 'react';
+import React, { useReducer, useCallback, useState, useEffect, useRef } from 'react';
 import { Layout } from './components/Layout';
 import { StoryLog } from './components/StoryLog';
 import { ActionPanel } from './components/ActionPanel';
@@ -34,6 +34,7 @@ import { TURN_TIMEOUT_MS } from './services/config';
 const SYSTEM_STABILIZED_MESSAGE = '[SYSTEM: Cognitive divergence detected. World state stabilized.]';
 const SYSTEM_MISSING_TERMINAL_MESSAGE = '[SYSTEM: Turn finalized with fallback (missing terminal chunk).]';
 const MAX_WORLD_FACTS = 50;
+const AUTO_SAVE_DEBOUNCE_MS = 500;
 
 // --- State Management ---
 
@@ -246,13 +247,29 @@ export default function App() {
   const [gameState, dispatch] = useReducer(gameReducer, null);
   const [isDirectorMode, setIsDirectorMode] = useState(false);
   const [lastTurnTrace, setLastTurnTrace] = useState<TurnTrace | null>(null);
+  const autosaveTimerRef = useRef<number | null>(null);
 
-  // Persistence Effect: Auto-save when game state changes (and isn't processing)
+  // Persistence Effect: Debounced autosave on gameplay checkpoints only (completed turns).
   useEffect(() => {
-    if (gameState && !gameState.isProcessing) {
-      saveGame(gameState);
+    if (!gameState || gameState.isProcessing) {
+      return;
     }
-  }, [gameState]);
+
+    if (autosaveTimerRef.current) {
+      window.clearTimeout(autosaveTimerRef.current);
+    }
+
+    autosaveTimerRef.current = window.setTimeout(() => {
+      saveGame(gameState);
+      autosaveTimerRef.current = null;
+    }, AUTO_SAVE_DEBOUNCE_MS);
+
+    return () => {
+      if (autosaveTimerRef.current) {
+        window.clearTimeout(autosaveTimerRef.current);
+      }
+    };
+  }, [gameState?.id, gameState?.tick, gameState?.isProcessing]);
 
   // --- Actions ---
 
@@ -282,7 +299,7 @@ export default function App() {
   };
 
   const exitGame = () => {
-    if (gameState) saveGame(gameState); // Ensure save on exit
+    if (gameState) saveGame(gameState, { force: true }); // Ensure save on exit
     dispatch({ type: 'RESET_GAME' });
     setView(ViewMode.HUB);
   };
