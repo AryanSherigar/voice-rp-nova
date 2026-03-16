@@ -135,10 +135,10 @@ export const DirectorOverlay: React.FC<Props> = ({ directorState, dna, onUpdate 
          <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Interaction Metrics</h3>
          <p className="text-[9px] text-slate-600 uppercase tracking-wide mb-3">Coaching KPI Snapshot</p>
          <div className="space-y-3">
-            <MiniDNA label="Trust" value={dna.trustBetrayal} color="bg-teal-500" />
+            <MiniDNA label="Trust (vs Betrayal)" value={100 - dna.trustBetrayal} color="bg-teal-500" />
             <MiniDNA label="Fear" value={directorState.tension} color="bg-indigo-500" />
             <MiniDNA label="Anger" value={100 - dna.orderChaos} color="bg-rose-500" />
-            <MiniDNA label="Hope" value={dna.hopeDespair} color="bg-orange-500" />
+            <MiniDNA label="Hope (vs Despair)" value={100 - dna.hopeDespair} color="bg-orange-500" />
          </div>
       </div>
 
