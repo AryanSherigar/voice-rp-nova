@@ -50,3 +50,15 @@ Failure behavior is explicit:
 - `closed`: if the provider call fails, request is rejected with HTTP 429.
 
 If the Upstash URL/token are missing, the limiter is disabled and the API logs a warning once at runtime (no in-memory fallback).
+
+## API payload limits (`/api/turn`)
+
+The turn endpoint enforces payload size at the framework parser layer (Next API `bodyParser.sizeLimit`) via `api/turn.ts` config:
+
+- `TURN_MAX_BODY_SIZE_LIMIT` (default: `1.5mb`)
+
+Behavior contract:
+
+- Requests larger than the configured parser limit are rejected before handler business logic runs.
+- Vercel/Next responds with HTTP `413 Payload Too Large` for these oversized bodies.
+- The in-handler `Content-Length` check was removed so clients should rely on HTTP 413 semantics (rather than advisory header validation).

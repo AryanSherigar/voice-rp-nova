@@ -14,7 +14,7 @@ const STORY_CARD_SIMILARITY_THRESHOLD = Number.parseFloat(process.env.STORY_CARD
 const STORY_CARD_EMBEDDING_CACHE_TTL_MS = Number.parseInt(process.env.STORY_CARD_EMBEDDING_CACHE_TTL_MS ?? `${30 * 60_000}`, 10);
 const STORY_CARD_EMBEDDING_CACHE_MAX_ENTRIES = Number.parseInt(process.env.STORY_CARD_EMBEDDING_CACHE_MAX_ENTRIES ?? '500', 10);
 const STORY_CARD_EMBEDDING_CACHE_SWEEP_INTERVAL_MS = Number.parseInt(process.env.STORY_CARD_EMBEDDING_CACHE_SWEEP_INTERVAL_MS ?? `${10 * 60_000}`, 10);
-const MAX_REQUEST_BODY_BYTES = Number.parseInt(process.env.TURN_MAX_BODY_BYTES ?? `${1_500_000}`, 10);
+const MAX_REQUEST_BODY_SIZE_LIMIT = process.env.TURN_MAX_BODY_SIZE_LIMIT ?? '1.5mb';
 const MAX_INPUT_AUDIO_BASE64_BYTES = Number.parseInt(process.env.TURN_MAX_AUDIO_BASE64_BYTES ?? `${1_200_000}`, 10);
 const MAX_PROMPT_STRING_LENGTH = 1_000;
 const MAX_INPUT_CONTENT_LENGTH = 2_000;
@@ -78,22 +78,12 @@ const asUntrustedBlock = (tag: string, value: string): string => `<${tag}>\n${sa
 const validateAudioMimeType = (value: unknown): value is string =>
   typeof value === 'string' && /^audio\/[a-z0-9.+-]+$/i.test(value.trim());
 
-const validateBodyLength = (req: any): ValidationResult<null> => {
-  const rawLength = req.headers['content-length'];
-  if (typeof rawLength !== 'string') {
-    return { ok: true, value: null };
-  }
-
-  const contentLength = Number.parseInt(rawLength, 10);
-  if (!Number.isFinite(contentLength) || contentLength <= 0) {
-    return { ok: false, error: 'Invalid Content-Length header.' };
-  }
-
-  if (contentLength > MAX_REQUEST_BODY_BYTES) {
-    return { ok: false, error: `Request payload too large. Max ${MAX_REQUEST_BODY_BYTES} bytes.` };
-  }
-
-  return { ok: true, value: null };
+export const config = {
+  api: {
+    bodyParser: {
+      sizeLimit: MAX_REQUEST_BODY_SIZE_LIMIT,
+    },
+  },
 };
 
 const validateInput = (input: unknown): ValidationResult<PlayerInput> => {
@@ -1083,12 +1073,6 @@ export default async function handler(req: any, res: any) {
 
   if (!NARRATOR_MODEL || !DIRECTOR_MODEL) {
     res.status(500).json({ error: 'Server misconfiguration: BEDROCK_NARRATOR_MODEL_ID or BEDROCK_DIRECTOR_MODEL_ID is missing.' });
-    return;
-  }
-
-  const bodyLengthCheck = validateBodyLength(req);
-  if (!bodyLengthCheck.ok) {
-    res.status(400).json({ error: bodyLengthCheck.error });
     return;
   }
 
